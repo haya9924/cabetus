@@ -1,0 +1,24 @@
+# ビルド成果物・一時ファイル
+**/build/
+.gradle/
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+/captures
+
+# プロジェクト設定・IDE関連
+.idea/
+.DS_Store
+*.iml
+
+# 【重要】環境依存・ローカル設定ファイル
+**/local.properties
+
+# 個人情報を含むテスト用PDF
+app/src/test/resources/attendance_sample.pdf
+app/src/test/resources/timetable_sample.pdf
+
+# AIアシスタント関連・作業メモ
+.claude/
+history_scan_notes.txt

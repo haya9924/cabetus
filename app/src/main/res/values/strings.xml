@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">cabetus</string>
+
+    <!-- Bottom navigation -->
+    <string name="tab_home">ホーム</string>
+    <string name="tab_assignments">課題</string>
+    <string name="tab_timetable">時間割</string>
+    <string name="tab_more">その他</string>
+
+    <!-- Notification channels -->
+    <string name="channel_daily_summary">今日のまとめ</string>
+    <string name="channel_class_start">授業開始</string>
+    <string name="channel_deadline">課題の期日</string>
+    <string name="channel_new_assignment">新規課題</string>
+    <string name="channel_fetch_failure">取得の失敗</string>
+
+    <!-- Widget -->
+    <string name="widget_title">課題の期日</string>
+    <string name="widget_description">残っている課題を期日順に表示します</string>
+
+    <!-- Share -->
+    <string name="tweet_text">cabetusを始めました！ https://github.com/ #cabetus #キャベツ</string>
+</resources>
