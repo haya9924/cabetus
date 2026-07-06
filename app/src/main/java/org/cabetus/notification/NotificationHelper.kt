@@ -173,6 +173,26 @@ class NotificationHelper @Inject constructor(
         safeNotify(notifId, builder)
     }
 
+    /** 課題取得中に表示する「更新中」通知（別チャンネル・無音・常駐）。 */
+    fun notifyFetchProgress() {
+        if (!canPost()) return
+        val builder = NotificationCompat.Builder(context, NotificationChannels.FETCH_PROGRESS)
+            .setSmallIcon(smallIcon())
+            .setContentTitle("更新中")
+            .setContentText("LETUS から課題を取得しています…")
+            .setOngoing(true)
+            .setSilent(true)
+            .setProgress(0, 0, true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(openAppIntent(PROGRESS_ID))
+        runCatching { nm.notify(PROGRESS_ID, builder.build()) }
+    }
+
+    /** 「更新中」通知を消去する。 */
+    fun cancelFetchProgress() {
+        runCatching { nm.cancel(PROGRESS_ID) }
+    }
+
     private fun post(
         channel: String,
         id: Int,
@@ -196,6 +216,8 @@ class NotificationHelper @Inject constructor(
     }
 
     companion object {
+        private val PROGRESS_ID = "fetch_progress".hashCode()
+
         private val TIME_FMT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("M/d HH:mm").withZone(ZoneId.of("Asia/Tokyo"))
 

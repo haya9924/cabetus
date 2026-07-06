@@ -8,6 +8,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.time.LocalDateTime
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,12 +21,23 @@ data class WeatherSummary(
     val maxTemp: Double?,
     val minTemp: Double?,
     val precipProbability: Int?,
+    /** 3時間ごと・12時間分の予報（現在+3/6/9/12h）。 */
+    val hourly: List<HourlyForecast> = emptyList(),
+)
+
+/** 3時間ごとの予報1点。 */
+data class HourlyForecast(
+    val hourLabel: String,
+    val emoji: String,
+    val temp: Int?,
+    val precip: Int?,
 )
 
 @Serializable
 private data class OpenMeteoResponse(
     val current: Current? = null,
     val daily: Daily? = null,
+    val hourly: Hourly? = null,
 ) {
     @Serializable
     data class Current(
@@ -38,6 +51,14 @@ private data class OpenMeteoResponse(
         @SerialName("temperature_2m_max") val tempMax: List<Double> = emptyList(),
         @SerialName("temperature_2m_min") val tempMin: List<Double> = emptyList(),
         @SerialName("precipitation_probability_max") val precipMax: List<Int> = emptyList(),
+    )
+
+    @Serializable
+    data class Hourly(
+        val time: List<String> = emptyList(),
+        @SerialName("temperature_2m") val temperature: List<Double> = emptyList(),
+        @SerialName("weather_code") val weatherCode: List<Int> = emptyList(),
+        @SerialName("precipitation_probability") val precipProbability: List<Int> = emptyList(),
     )
 }
 
@@ -57,7 +78,8 @@ class WeatherRepository @Inject constructor(
             "?latitude=${campus.latitude}&longitude=${campus.longitude}" +
             "&current=temperature_2m,weather_code" +
             "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
-            "&timezone=Asia%2FTokyo&forecast_days=1"
+            "&hourly=temperature_2m,weather_code,precipitation_probability" +
+            "&timezone=Asia%2FTokyo&forecast_days=2"
         try {
             val body = client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
@@ -65,6 +87,9 @@ class WeatherRepository @Inject constructor(
             }
             val parsed = json.decodeFromString(OpenMeteoResponse.serializer(), body)
             val code = parsed.current?.weatherCode ?: parsed.daily?.weatherCode?.firstOrNull() ?: 0
+            val hourly = parsed.hourly?.let {
+                pickHourly(it.time, it.temperature, it.weatherCode, it.precipProbability)
+            } ?: emptyList()
             val summary = WeatherSummary(
                 emoji = WmoCode.emoji(code),
                 label = WmoCode.label(code),
@@ -72,11 +97,43 @@ class WeatherRepository @Inject constructor(
                 maxTemp = parsed.daily?.tempMax?.firstOrNull(),
                 minTemp = parsed.daily?.tempMin?.firstOrNull(),
                 precipProbability = parsed.daily?.precipMax?.firstOrNull(),
+                hourly = hourly,
             )
             cache[campus] = Cached(System.currentTimeMillis(), summary)
             summary
         } catch (_: Exception) {
             null
+        }
+    }
+
+    companion object {
+        /**
+         * 現在時刻以降の最初の時刻から3時間刻みで5点（現在+3/6/9/12h）を抽出する。
+         * 時刻文字列はローカル（Asia/Tokyo）の "yyyy-MM-ddTHH:mm" 形式。
+         */
+        fun pickHourly(
+            times: List<String>,
+            temps: List<Double>,
+            codes: List<Int>,
+            precs: List<Int>,
+            now: LocalDateTime = LocalDateTime.now(ZoneId.of("Asia/Tokyo")),
+        ): List<HourlyForecast> {
+            if (times.isEmpty()) return emptyList()
+            val startIdx = times.indexOfFirst {
+                runCatching { LocalDateTime.parse(it) }.getOrNull()?.let { t -> !t.isBefore(now) } == true
+            }
+            if (startIdx < 0) return emptyList()
+            return (0..4).mapNotNull { step ->
+                val i = startIdx + step * 3
+                val t = times.getOrNull(i) ?: return@mapNotNull null
+                val ldt = runCatching { LocalDateTime.parse(t) }.getOrNull() ?: return@mapNotNull null
+                HourlyForecast(
+                    hourLabel = "${ldt.hour}時",
+                    emoji = WmoCode.emoji(codes.getOrNull(i) ?: 0),
+                    temp = temps.getOrNull(i)?.let { Math.round(it).toInt() },
+                    precip = precs.getOrNull(i),
+                )
+            }
         }
     }
 }

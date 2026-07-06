@@ -26,4 +26,5 @@ object Routes {
     const val PDF_IMPORT = "pdf_import"
     const val SYLLABUS = "syllabus" // syllabus/{code}
     const val SETUP = "setup"
+    const val HIDDEN = "hidden"
 }

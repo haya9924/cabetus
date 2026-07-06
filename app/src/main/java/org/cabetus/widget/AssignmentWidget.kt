@@ -44,11 +44,14 @@ import java.time.format.DateTimeFormatter
 class AssignmentWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val dao = EntryPointAccessors.fromApplication(
-            context.applicationContext,
-            WidgetEntryPoint::class.java,
-        ).assignmentDao()
-        val pending = dao.getPending()
+        // DB アクセスは例外を投げ得る（Hilt/Room 初期化等）。失敗しても真っ白に
+        // ならないよう握りつぶし、フォールバック表示に切り替える。
+        val pending: List<AssignmentEntity>? = runCatching {
+            EntryPointAccessors.fromApplication(
+                context.applicationContext,
+                WidgetEntryPoint::class.java,
+            ).assignmentDao().getPending()
+        }.getOrNull()
 
         provideContent {
             val prefs: Preferences = currentState()
@@ -60,8 +63,7 @@ class AssignmentWidget : GlanceAppWidget() {
                 )
             }.getOrDefault(WidgetConfig.DEFAULT_COLOR)
 
-            val (bg, fg) = WidgetConfig.colors(scheme)
-            val accent = WidgetConfig.accent(scheme)
+            val (bg, fg, accent) = WidgetConfig.resolveColors(context, scheme)
             val bgWithOpacity = bg.copy(alpha = opacity / 100f)
 
             WidgetBody(context, pending, bgWithOpacity, fg, accent)
@@ -76,14 +78,14 @@ class AssignmentWidget : GlanceAppWidget() {
     @androidx.compose.runtime.Composable
     private fun WidgetBody(
         context: Context,
-        pending: List<AssignmentEntity>,
+        pending: List<AssignmentEntity>?,
         bg: Color,
         fg: Color,
         accent: Color,
     ) {
         val openApp = actionStartActivity(
             Intent(context, MainActivity::class.java).apply {
-                putExtra(MainActivity.EXTRA_NAVIGATE, "assignments")
+                putExtra(MainActivity.EXTRA_NAVIGATE, MainActivity.NAV_ASSIGNMENTS)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },
         )
@@ -96,6 +98,18 @@ class AssignmentWidget : GlanceAppWidget() {
                 .padding(12.dp)
                 .clickable(openApp),
         ) {
+            if (pending == null) {
+                Text(
+                    "読み込みに失敗しました",
+                    style = TextStyle(color = ColorProvider(fg), fontWeight = FontWeight.Bold),
+                )
+                Spacer(GlanceModifier.padding(2.dp))
+                Text(
+                    "タップしてアプリを開く",
+                    style = TextStyle(color = ColorProvider(accent)),
+                )
+                return@Column
+            }
             Row(modifier = GlanceModifier.fillMaxWidth()) {
                 Text(
                     "課題の期日",

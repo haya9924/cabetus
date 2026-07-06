@@ -1,6 +1,6 @@
 package org.cabetus.ui.assignments
 
-import androidx.compose.foundation.horizontalScroll
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,26 +8,37 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.cabetus.data.local.AssignmentEntity
@@ -38,15 +49,21 @@ import org.cabetus.notification.NotificationHelper
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AssignmentsScreen(
+    onOpenHidden: () -> Unit = {},
     viewModel: AssignmentsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("課題") },
                 actions = {
+                    IconButton(onClick = onOpenHidden) {
+                        Icon(Icons.Filled.VisibilityOff, contentDescription = "非表示にしたもの")
+                    }
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Filled.Refresh, contentDescription = "取得")
                     }
@@ -55,6 +72,10 @@ fun AssignmentsScreen(
         },
     ) { padding ->
         Column(Modifier.padding(padding)) {
+            // 更新中の一般的なプログレスアニメーション
+            if (isRefreshing) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
             // ソート・ステータス
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -75,23 +96,27 @@ fun AssignmentsScreen(
                     )
                 }
             }
-            // 科目チップ
-            if (state.courses.isNotEmpty()) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    state.courses.forEach { course ->
-                        FilterChip(
-                            selected = state.selectedCourse == course,
-                            onClick = { viewModel.toggleCourse(course) },
-                            label = { Text(course, maxLines = 1) },
-                        )
-                    }
+            // 期日フィルタ
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                DueFilter.entries.forEach { f ->
+                    FilterChip(
+                        selected = state.dueFilter == f,
+                        onClick = { viewModel.setDueFilter(f) },
+                        label = { Text(f.label) },
+                    )
                 }
+            }
+            // 科目絞り込み（複数選択プルダウン）
+            if (state.courses.isNotEmpty()) {
+                CourseFilterDropdown(
+                    courses = state.courses,
+                    selected = state.selectedCourses,
+                    onToggle = viewModel::toggleCourse,
+                    onClear = viewModel::clearCourses,
+                )
             }
 
             if (state.assignments.isEmpty()) {
@@ -109,6 +134,13 @@ fun AssignmentsScreen(
                     items(state.assignments, key = { it.id }) { a ->
                         AssignmentCard(
                             a = a,
+                            onOpen = {
+                                if (a.url.isNotBlank()) {
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, a.url.toUri()))
+                                    }
+                                }
+                            },
                             onIgnore = { viewModel.setIgnored(a.id, true) },
                         )
                     }
@@ -118,9 +150,54 @@ fun AssignmentsScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AssignmentCard(a: AssignmentEntity, onIgnore: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
+private fun CourseFilterDropdown(
+    courses: List<String>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = if (selected.isEmpty()) "すべての科目" else "${selected.size}科目を選択中"
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        OutlinedTextField(
+            value = label,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("科目で絞り込み") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                leadingIcon = { Checkbox(checked = selected.isEmpty(), onCheckedChange = null) },
+                text = { Text("すべて") },
+                onClick = { onClear() },
+            )
+            courses.forEach { course ->
+                DropdownMenuItem(
+                    leadingIcon = {
+                        Checkbox(checked = course in selected, onCheckedChange = null)
+                    },
+                    text = { Text(course, maxLines = 1) },
+                    onClick = { onToggle(course) },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AssignmentCard(a: AssignmentEntity, onOpen: () -> Unit, onIgnore: () -> Unit) {
+    Card(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(

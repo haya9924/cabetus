@@ -62,6 +62,17 @@
         </receiver>
 
         <receiver
+            android:name=".widget.NextClassWidgetReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/next_class_widget_info" />
+        </receiver>
+
+        <receiver
             android:name=".notification.BootReceiver"
             android:exported="true">
             <intent-filter>

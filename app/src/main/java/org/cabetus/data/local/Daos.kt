@@ -15,8 +15,14 @@ interface MoodleCourseDao {
     @Query("SELECT * FROM moodle_courses WHERE enabled = 1")
     suspend fun getEnabled(): List<MoodleCourseEntity>
 
+    @Query("SELECT * FROM moodle_courses")
+    suspend fun getAll(): List<MoodleCourseEntity>
+
     @Query("SELECT * FROM moodle_courses ORDER BY name")
     fun observeAll(): Flow<List<MoodleCourseEntity>>
+
+    @Query("UPDATE moodle_courses SET enabled = :enabled WHERE id = :id")
+    suspend fun setEnabled(id: String, enabled: Boolean)
 }
 
 @Dao
@@ -30,16 +36,29 @@ interface AssignmentDao {
     @Query("SELECT * FROM assignments")
     suspend fun getAll(): List<AssignmentEntity>
 
-    @Query("SELECT * FROM assignments WHERE ignored = 0 ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC")
+    @Query(
+        """
+        SELECT * FROM assignments
+        WHERE ignored = 0
+          AND courseId NOT IN (SELECT id FROM moodle_courses WHERE enabled = 0)
+        ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC
+        """,
+    )
     fun observeAll(): Flow<List<AssignmentEntity>>
+
+    /** 非表示にした課題（復元用）。 */
+    @Query("SELECT * FROM assignments WHERE ignored = 1 ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC")
+    fun observeIgnored(): Flow<List<AssignmentEntity>>
 
     /**
      * ホーム・ウィジェット用: 未提出かつ期限切れでない課題を期日昇順で。
+     * 非表示コースの課題は除外する。
      */
     @Query(
         """
         SELECT * FROM assignments
         WHERE ignored = 0
+          AND courseId NOT IN (SELECT id FROM moodle_courses WHERE enabled = 0)
           AND lifecycleStatus IN ('ACTIVE', 'BEFORE_START')
           AND submissionStatus NOT IN ('SUBMITTED', 'COMPLETED')
         ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC
@@ -51,6 +70,7 @@ interface AssignmentDao {
         """
         SELECT * FROM assignments
         WHERE ignored = 0
+          AND courseId NOT IN (SELECT id FROM moodle_courses WHERE enabled = 0)
           AND lifecycleStatus IN ('ACTIVE', 'BEFORE_START')
           AND submissionStatus NOT IN ('SUBMITTED', 'COMPLETED')
         ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC

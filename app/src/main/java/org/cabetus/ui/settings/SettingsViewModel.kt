@@ -58,6 +58,14 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setDynamicColor(enabled) }
     }
 
+    fun setCustomAccent(argb: Int?) {
+        viewModelScope.launch { settingsRepository.setCustomAccent(argb) }
+    }
+
+    fun setCustomBackground(argb: Int?) {
+        viewModelScope.launch { settingsRepository.setCustomBackground(argb) }
+    }
+
     fun setAi(ai: AiSettings) {
         viewModelScope.launch { settingsRepository.setAiSettings(ai) }
     }

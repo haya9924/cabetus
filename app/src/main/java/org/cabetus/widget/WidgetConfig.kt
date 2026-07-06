@@ -1,5 +1,10 @@
 package org.cabetus.widget
 
+import android.content.Context
+import android.content.res.Configuration
+import android.os.Build
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -37,5 +42,21 @@ object WidgetConfig {
         WidgetColorScheme.BLUE -> Color(0xFF8FB7FF)
         WidgetColorScheme.GREEN -> Color(0xFF8FE3B0)
         WidgetColorScheme.PURPLE -> Color(0xFFCBB0FF)
+    }
+
+    /**
+     * 背景・文字・アクセント色を解決する。DYNAMIC かつ Android 12+ では端末の
+     * ダイナミックカラー（Material You）から実際の色を取り出す。
+     * 色は描画時に解決されるため、ライト/ダーク切替は次回のウィジェット更新で反映される。
+     */
+    fun resolveColors(context: Context, scheme: WidgetColorScheme): Triple<Color, Color, Color> {
+        if (scheme == WidgetColorScheme.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val night = (context.resources.configuration.uiMode and
+                Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+            val cs = if (night) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            return Triple(cs.surface, cs.onSurface, cs.primary)
+        }
+        val (bg, fg) = colors(scheme)
+        return Triple(bg, fg, accent(scheme))
     }
 }

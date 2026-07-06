@@ -31,10 +31,21 @@ data class FetchSettings(
     val forceFetchAfterSkips: Int = 3,
 )
 
+/** AIコメントの口調プリセット。 */
+enum class AiTone(val label: String, val instruction: String) {
+    DEFAULT("標準", ""),
+    POLITE("丁寧", "常に丁寧語（です・ます調）で、落ち着いた敬意ある口調で話してください。"),
+    FRIENDLY("フレンドリー", "友達のようにくだけたタメ口で、絵文字も交えつつ明るく話してください。"),
+    KANSAI("関西弁", "親しみやすい関西弁で話してください。"),
+    TSUNDERE("ツンデレ", "ツンデレ口調で話してください。素直じゃないけど本当は応援している、という態度で。"),
+}
+
 data class AiSettings(
     val baseUrl: String = "",
     val apiKey: String = "",
     val model: String = "",
+    val tone: AiTone = AiTone.DEFAULT,
+    val customInstruction: String = "",
 ) {
     val isConfigured: Boolean get() = baseUrl.isNotBlank() && model.isNotBlank()
 }
@@ -54,6 +65,10 @@ data class AppSettings(
     val campus: Campus = Campus.KATSUSHIKA,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val dynamicColor: Boolean = true,
+    /** カスタムアクセント色（ARGB Int）。null=デフォルト。 */
+    val customAccent: Int? = null,
+    /** カスタム背景色（ARGB Int）。null=デフォルト。 */
+    val customBackground: Int? = null,
     val loggedIn: Boolean = false,
     val fetch: FetchSettings = FetchSettings(),
     val ai: AiSettings = AiSettings(),
@@ -73,6 +88,8 @@ class SettingsRepository @Inject constructor(
         val CAMPUS = stringPreferencesKey("campus")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
+        val CUSTOM_ACCENT = intPreferencesKey("custom_accent")
+        val CUSTOM_BACKGROUND = intPreferencesKey("custom_background")
         val LOGGED_IN = booleanPreferencesKey("logged_in")
 
         val FETCH_FREQ = stringPreferencesKey("fetch_freq")
@@ -84,6 +101,8 @@ class SettingsRepository @Inject constructor(
         val AI_BASE_URL = stringPreferencesKey("ai_base_url")
         val AI_API_KEY = stringPreferencesKey("ai_api_key")
         val AI_MODEL = stringPreferencesKey("ai_model")
+        val AI_TONE = stringPreferencesKey("ai_tone")
+        val AI_CUSTOM_INSTRUCTION = stringPreferencesKey("ai_custom_instruction")
 
         val N_DAILY = booleanPreferencesKey("n_daily")
         val N_DAILY_HOUR = intPreferencesKey("n_daily_hour")
@@ -109,6 +128,8 @@ class SettingsRepository @Inject constructor(
         themeMode = runCatching { ThemeMode.valueOf(this[Keys.THEME_MODE] ?: "SYSTEM") }
             .getOrDefault(ThemeMode.SYSTEM),
         dynamicColor = this[Keys.DYNAMIC_COLOR] ?: true,
+        customAccent = this[Keys.CUSTOM_ACCENT],
+        customBackground = this[Keys.CUSTOM_BACKGROUND],
         loggedIn = this[Keys.LOGGED_IN] ?: false,
         fetch = FetchSettings(
             frequency = runCatching {
@@ -122,6 +143,9 @@ class SettingsRepository @Inject constructor(
             baseUrl = this[Keys.AI_BASE_URL] ?: "",
             apiKey = this[Keys.AI_API_KEY] ?: "",
             model = this[Keys.AI_MODEL] ?: "",
+            tone = runCatching { AiTone.valueOf(this[Keys.AI_TONE] ?: "DEFAULT") }
+                .getOrDefault(AiTone.DEFAULT),
+            customInstruction = this[Keys.AI_CUSTOM_INSTRUCTION] ?: "",
         ),
         notifications = NotificationSettings(
             dailySummary = this[Keys.N_DAILY] ?: true,
@@ -144,6 +168,12 @@ class SettingsRepository @Inject constructor(
     suspend fun setCampus(campus: Campus) = edit { it[Keys.CAMPUS] = campus.name }
     suspend fun setThemeMode(mode: ThemeMode) = edit { it[Keys.THEME_MODE] = mode.name }
     suspend fun setDynamicColor(value: Boolean) = edit { it[Keys.DYNAMIC_COLOR] = value }
+    suspend fun setCustomAccent(argb: Int?) = edit {
+        if (argb == null) it.remove(Keys.CUSTOM_ACCENT) else it[Keys.CUSTOM_ACCENT] = argb
+    }
+    suspend fun setCustomBackground(argb: Int?) = edit {
+        if (argb == null) it.remove(Keys.CUSTOM_BACKGROUND) else it[Keys.CUSTOM_BACKGROUND] = argb
+    }
     suspend fun setLoggedIn(value: Boolean) = edit { it[Keys.LOGGED_IN] = value }
     suspend fun setAcademicYear(year: Int) = edit { it[Keys.ACADEMIC_YEAR] = year }
 
@@ -158,6 +188,8 @@ class SettingsRepository @Inject constructor(
         it[Keys.AI_BASE_URL] = a.baseUrl
         it[Keys.AI_API_KEY] = a.apiKey
         it[Keys.AI_MODEL] = a.model
+        it[Keys.AI_TONE] = a.tone.name
+        it[Keys.AI_CUSTOM_INSTRUCTION] = a.customInstruction
     }
 
     suspend fun setNotificationSettings(n: NotificationSettings) = edit {

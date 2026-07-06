@@ -17,6 +17,7 @@
     <!-- Widget -->
     <string name="widget_title">課題の期日</string>
     <string name="widget_description">残っている課題を期日順に表示します</string>
+    <string name="next_class_widget_description">次の授業（授業名・教室・時間）を表示します</string>
 
     <!-- Share -->
     <string name="tweet_text">cabetusを始めました！ https://github.com/ #cabetus #キャベツ</string>

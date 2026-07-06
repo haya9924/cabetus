@@ -52,39 +52,45 @@ class FetchWorker @AssistedInject constructor(
             }
         }
 
-        val result = letusRepository.fetchAll()
-        val now = System.currentTimeMillis()
+        // 「更新中」通知を表示し、終了・例外・retry いずれでも必ず消す
+        notificationHelper.notifyFetchProgress()
+        try {
+            val result = letusRepository.fetchAll()
+            val now = System.currentTimeMillis()
 
-        when (result) {
-            is FetchResult.Success -> {
-                if (settings.notifications.newAssignment) {
-                    notificationHelper.notifyNewAssignments(result.newAssignments)
+            return when (result) {
+                is FetchResult.Success -> {
+                    if (settings.notifications.newAssignment) {
+                        notificationHelper.notifyNewAssignments(result.newAssignments)
+                    }
+                    if (settings.notifications.deadline) {
+                        notificationHelper.notifyDeadlineWarnings(result.dueSoon)
+                    }
+                    settingsRepository.setLoggedIn(true)
+                    settingsRepository.setLastFetch("取得成功: ${result.detected}件", now)
+                    widgetUpdater.updateAll()
+                    Result.success()
                 }
-                if (settings.notifications.deadline) {
-                    notificationHelper.notifyDeadlineWarnings(result.dueSoon)
-                }
-                settingsRepository.setLoggedIn(true)
-                settingsRepository.setLastFetch("取得成功: ${result.detected}件", now)
-                widgetUpdater.updateAll()
-                return Result.success()
-            }
 
-            FetchResult.LoginRequired -> {
-                settingsRepository.setLoggedIn(false)
-                if (settings.notifications.fetchFailure) {
-                    notificationHelper.notifyFetchFailure(loginRequired = true)
+                FetchResult.LoginRequired -> {
+                    settingsRepository.setLoggedIn(false)
+                    if (settings.notifications.fetchFailure) {
+                        notificationHelper.notifyFetchFailure(loginRequired = true)
+                    }
+                    settingsRepository.setLastFetch("要再ログイン", now)
+                    Result.success()
                 }
-                settingsRepository.setLastFetch("要再ログイン", now)
-                return Result.success()
-            }
 
-            is FetchResult.NetworkError -> {
-                if (settings.notifications.fetchFailure) {
-                    notificationHelper.notifyFetchFailure(loginRequired = false)
+                is FetchResult.NetworkError -> {
+                    if (settings.notifications.fetchFailure) {
+                        notificationHelper.notifyFetchFailure(loginRequired = false)
+                    }
+                    settingsRepository.setLastFetch("失敗: ${result.message}", now)
+                    Result.retry()
                 }
-                settingsRepository.setLastFetch("失敗: ${result.message}", now)
-                return Result.retry()
             }
+        } finally {
+            notificationHelper.cancelFetchProgress()
         }
     }
 

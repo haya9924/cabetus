@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,9 +40,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
+import org.cabetus.domain.NextClassResolver
 import org.cabetus.domain.PeriodTimes
 import java.time.LocalDate
-import java.time.LocalTime
+import java.time.LocalDateTime
 
 private val DAY_LABELS = listOf("月", "火", "水", "木", "金", "土")
 
@@ -62,9 +65,16 @@ fun TimetableScreen(
     }
 
     val today = LocalDate.now().dayOfWeek.value // 1=Mon..7=Sun
-    val now = LocalTime.now()
-    val currentPeriod = (1..7).firstOrNull { p ->
-        PeriodTimes.of(p)?.let { now >= it.start && now <= it.end } == true
+    // 30秒ごとに現在時刻を更新し、時限境界をまたいでもハイライトが追従する
+    val now by produceState(LocalDateTime.now()) {
+        while (true) {
+            delay(30_000)
+            value = LocalDateTime.now()
+        }
+    }
+    // 授業中のコマ、なければ次のコマをハイライト対象にする
+    val highlight = remember(state.grid, now) {
+        NextClassResolver.resolveSlot(state.grid.keys, now)
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("時間割") }) }) { padding ->
@@ -112,20 +122,29 @@ fun TimetableScreen(
                     }
                     for (dayIdx in 1..6) {
                         val cells = state.grid[dayIdx to period].orEmpty()
-                        val isNow = dayIdx == today && period == currentPeriod
+                        val isHighlightSlot = highlight?.dayOfWeek == dayIdx && highlight.period == period
+                        val isOngoing = isHighlightSlot && highlight?.isOngoing == true
+                        val isNext = isHighlightSlot && highlight?.isOngoing == false
+                        val bgColor = when {
+                            isOngoing -> MaterialTheme.colorScheme.primaryContainer
+                            isNext -> MaterialTheme.colorScheme.secondaryContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                        val borderColor = when {
+                            isOngoing -> MaterialTheme.colorScheme.primary
+                            isNext -> MaterialTheme.colorScheme.secondary
+                            else -> Color.Transparent
+                        }
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxSize()
                                 .padding(2.dp)
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(
-                                    if (isNow) MaterialTheme.colorScheme.primaryContainer
-                                    else MaterialTheme.colorScheme.surfaceVariant,
-                                )
+                                .background(bgColor)
                                 .border(
-                                    if (isNow) 2.dp else 0.dp,
-                                    if (isNow) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    if (isOngoing || isNext) 2.dp else 0.dp,
+                                    borderColor,
                                     RoundedCornerShape(8.dp),
                                 )
                                 .clickable(enabled = cells.isNotEmpty()) {
@@ -150,6 +169,15 @@ fun TimetableScreen(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
+                            }
+                            if (isNext && cells.isNotEmpty()) {
+                                Text(
+                                    "次",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.align(Alignment.TopEnd),
+                                )
                             }
                         }
                     }

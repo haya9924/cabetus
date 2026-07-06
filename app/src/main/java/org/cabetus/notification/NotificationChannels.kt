@@ -12,6 +12,7 @@ object NotificationChannels {
     const val DEADLINE = "deadline"
     const val NEW_ASSIGNMENT = "new_assignment"
     const val FETCH_FAILURE = "fetch_failure"
+    const val FETCH_PROGRESS = "fetch_progress"
 
     fun createAll(context: Context) {
         val nm = context.getSystemService<NotificationManager>() ?: return
@@ -31,6 +32,9 @@ object NotificationChannels {
             NotificationChannel(
                 FETCH_FAILURE, "取得の失敗", NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "データ取得に失敗したお知らせ" },
+            NotificationChannel(
+                FETCH_PROGRESS, "更新中", NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = "課題の取得中に表示するお知らせ" },
         )
         nm.createNotificationChannels(channels)
     }

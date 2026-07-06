@@ -1,12 +1,19 @@
 package org.cabetus.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,6 +38,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -209,6 +219,15 @@ private fun CampusSection(s: AppSettings, vm: SettingsViewModel) {
     }
 }
 
+private val ACCENT_PRESETS = listOf(
+    0xFF3A5BA0, 0xFF00695C, 0xFF2E7D32, 0xFFEF6C00,
+    0xFFC62828, 0xFFAD1457, 0xFF6A1B9A, 0xFF5D4037,
+)
+private val BACKGROUND_PRESETS = listOf(
+    0xFFFFFFFF, 0xFFFAF6EF, 0xFFECEFF1, 0xFFE3E7EC,
+    0xFF121212, 0xFF0D1B2A, 0xFF1B1B2F, 0xFF12232E,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ThemeSection(s: AppSettings, vm: SettingsViewModel) {
@@ -224,14 +243,124 @@ private fun ThemeSection(s: AppSettings, vm: SettingsViewModel) {
             }
         }
         SwitchRow("ダイナミックカラー (Material You)", s.dynamicColor) { vm.setDynamicColor(it) }
+
+        ColorRow(
+            title = "アクセントカラー",
+            presets = ACCENT_PRESETS,
+            selected = s.customAccent,
+            onSelect = { vm.setCustomAccent(it) },
+        )
+        ColorRow(
+            title = "背景色",
+            presets = BACKGROUND_PRESETS,
+            selected = s.customBackground,
+            onSelect = { vm.setCustomBackground(it) },
+        )
+        if (s.customAccent != null || s.customBackground != null) {
+            Text(
+                "カスタムカラー設定時はダイナミックカラーより優先されます。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
+@Composable
+private fun ColorRow(
+    title: String,
+    presets: List<Long>,
+    selected: Int?,
+    onSelect: (Int?) -> Unit,
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    Text(title, style = MaterialTheme.typography.labelLarge)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // デフォルト（未設定）
+        DefaultSwatch(isSelected = selected == null, onClick = { onSelect(null) })
+        presets.forEach { argb ->
+            val color = Color(argb)
+            ColorSwatch(
+                color = color,
+                isSelected = selected == color.toArgb(),
+                onClick = { onSelect(color.toArgb()) },
+            )
+        }
+        // カスタム
+        Box(
+            Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                .clickable { showPicker = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("+", style = MaterialTheme.typography.titleMedium)
+        }
+    }
+    if (showPicker) {
+        ColorPickerDialog(
+            initial = selected?.let { Color(it) } ?: Color(presets.first()),
+            onPick = { onSelect(it.toArgb()) },
+            onDismiss = { showPicker = false },
+        )
+    }
+}
+
+@Composable
+private fun ColorSwatch(color: Color, isSelected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(color)
+            .border(
+                if (isSelected) 3.dp else 1.dp,
+                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                CircleShape,
+            )
+            .clickable(onClick = onClick),
+    )
+}
+
+@Composable
+private fun DefaultSwatch(isSelected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                if (isSelected) 3.dp else 1.dp,
+                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("既", style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AiSection(s: AppSettings, aiTest: String?, vm: SettingsViewModel) {
     var baseUrl by remember(s.ai.baseUrl) { mutableStateOf(s.ai.baseUrl) }
     var apiKey by remember(s.ai.apiKey) { mutableStateOf(s.ai.apiKey) }
     var model by remember(s.ai.model) { mutableStateOf(s.ai.model) }
+    var tone by remember(s.ai.tone) { mutableStateOf(s.ai.tone) }
+    var customInstruction by remember(s.ai.customInstruction) { mutableStateOf(s.ai.customInstruction) }
+
+    fun current() = org.cabetus.data.settings.AiSettings(
+        baseUrl.trim(), apiKey.trim(), model.trim(), tone, customInstruction.trim(),
+    )
 
     SectionCard("AI（OpenAI互換API）") {
         Text(
@@ -255,17 +384,34 @@ private fun AiSection(s: AppSettings, aiTest: String?, vm: SettingsViewModel) {
             label = { Text("モデル名") }, singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+
+        Text("口調", style = MaterialTheme.typography.labelLarge)
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            org.cabetus.data.settings.AiTone.entries.forEach { t ->
+                FilterChip(
+                    selected = tone == t,
+                    onClick = { tone = t },
+                    label = { Text(t.label) },
+                )
+            }
+        }
+        OutlinedTextField(
+            value = customInstruction, onValueChange = { customInstruction = it },
+            label = { Text("カスタム指示（例: 一人称は「ボク」）") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = {
-                    vm.setAi(org.cabetus.data.settings.AiSettings(baseUrl.trim(), apiKey.trim(), model.trim()))
-                },
+                onClick = { vm.setAi(current()) },
                 modifier = Modifier.weight(1f),
             ) { Text("保存") }
             OutlinedButton(
-                onClick = {
-                    vm.testAi(org.cabetus.data.settings.AiSettings(baseUrl.trim(), apiKey.trim(), model.trim()))
-                },
+                onClick = { vm.testAi(current()) },
                 modifier = Modifier.weight(1f),
             ) { Text("テスト送信") }
         }
