@@ -9,12 +9,14 @@
 LETUS の課題と CLASS の時間割・出欠をまとめて表示する、理科大生（全学部）向けの非公式 Android アプリです。
 神楽坂・葛飾・野田、どのキャンパスでも使えます。
 
-`β1.0`
+`β1.1`
 
 [<img src="https://raw.githubusercontent.com/machiav3lli/oandbackupx/034b226cea5c1b30eb4f6a6f313e4dadcbb0ece4/badge_github.png" alt="Get it on GitHub" height="70">](../../releases)
 [<img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="70">](https://github.com/ImranR98/Obtainium)
 
+[セキュリティについて](https://github.com/haya9924/cabetus/blob/main/guide%2FSECURITY.md)
 
+[初心者向け導入方法](https://github.com/haya9924/cabetus/blob/main/guide%2FCabetus_Installation_Guide.md)
 </div>
 
 ---
