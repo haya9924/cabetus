@@ -23,6 +23,7 @@ import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
+import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
@@ -103,7 +104,8 @@ class AssignmentWidget : GlanceAppWidget() {
                     "読み込みに失敗しました",
                     style = TextStyle(color = ColorProvider(fg), fontWeight = FontWeight.Bold),
                 )
-                Spacer(GlanceModifier.padding(2.dp))
+                // Glance の Spacer はサイズ未指定だと展開して後続要素を潰すため、必ず明示サイズを与える
+                Spacer(GlanceModifier.height(4.dp))
                 Text(
                     "タップしてアプリを開く",
                     style = TextStyle(color = ColorProvider(accent)),
@@ -121,7 +123,7 @@ class AssignmentWidget : GlanceAppWidget() {
                     style = TextStyle(color = ColorProvider(accent), fontWeight = FontWeight.Bold),
                 )
             }
-            Spacer(GlanceModifier.padding(4.dp))
+            Spacer(GlanceModifier.height(8.dp))
             if (pending.isEmpty()) {
                 Text(
                     "未提出の課題はありません",

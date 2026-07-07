@@ -18,6 +18,7 @@ import androidx.glance.currentState
 import androidx.glance.layout.Column
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
@@ -99,7 +100,8 @@ class NextClassWidget : GlanceAppWidget() {
                     "次の授業",
                     style = TextStyle(color = ColorProvider(fg), fontWeight = FontWeight.Bold),
                 )
-                Spacer(GlanceModifier.padding(2.dp))
+                // Glance の Spacer はサイズ未指定だと展開して後続要素を潰すため、必ず明示サイズを与える
+                Spacer(GlanceModifier.height(4.dp))
                 Text(
                     "今後の授業はありません",
                     style = TextStyle(color = ColorProvider(fg)),
@@ -110,7 +112,7 @@ class NextClassWidget : GlanceAppWidget() {
                 if (info.isOngoing) "授業中" else "次の授業",
                 style = TextStyle(color = ColorProvider(accent), fontWeight = FontWeight.Bold),
             )
-            Spacer(GlanceModifier.padding(2.dp))
+            Spacer(GlanceModifier.height(4.dp))
             Text(
                 info.cell.courseName.ifBlank { info.cell.courseCode },
                 maxLines = 2,
