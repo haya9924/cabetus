@@ -15,11 +15,14 @@ import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.currentState
+import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
+import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -118,19 +121,27 @@ class NextClassWidget : GlanceAppWidget() {
                 maxLines = 2,
                 style = TextStyle(color = ColorProvider(fg), fontWeight = FontWeight.Bold),
             )
-            Text(
-                "%d限 %02d:%02d〜%02d:%02d".format(
-                    info.period,
-                    info.start.hour, info.start.minute,
-                    info.end.hour, info.end.minute,
-                ),
-                style = TextStyle(color = ColorProvider(fg)),
-            )
-            Text(
-                if (info.cell.isOnline) "オンライン" else (info.cell.room ?: ""),
-                maxLines = 1,
-                style = TextStyle(color = ColorProvider(accent)),
-            )
+            // 縦幅が小さいので、時限・時間と教室名を横並びにして見切れを防ぐ
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "%d限 %02d:%02d〜%02d:%02d".format(
+                        info.period,
+                        info.start.hour, info.start.minute,
+                        info.end.hour, info.end.minute,
+                    ),
+                    maxLines = 1,
+                    style = TextStyle(color = ColorProvider(fg)),
+                )
+                val room = if (info.cell.isOnline) "オンライン" else (info.cell.room ?: "")
+                if (room.isNotBlank()) {
+                    Spacer(GlanceModifier.width(8.dp))
+                    Text(
+                        room,
+                        maxLines = 1,
+                        style = TextStyle(color = ColorProvider(accent)),
+                    )
+                }
+            }
         }
     }
 }
