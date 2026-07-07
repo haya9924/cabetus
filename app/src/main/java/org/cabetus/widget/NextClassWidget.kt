@@ -41,11 +41,15 @@ class NextClassWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         // DB アクセスは例外を投げ得るため握りつぶす。失敗（例外）と「授業なし」（成功だが null）を区別する。
         val result: Result<NextClassInfo?> = runCatching {
-            val cells = EntryPointAccessors.fromApplication(
+            val entryPoint = EntryPointAccessors.fromApplication(
                 context.applicationContext,
                 WidgetEntryPoint::class.java,
-            ).timetableDao().getAll()
-            NextClassResolver.resolve(cells)
+            )
+            val info = NextClassResolver.resolve(entryPoint.timetableDao().getAll())
+            // 描画のたびに次のコマ境界(授業開始/終了)での自動更新アラームを張り直す。
+            // これによりアプリを開かなくても授業中↔次の授業の切り替えに追従する。
+            runCatching { entryPoint.alarmScheduler().scheduleNextClassWidgetUpdate() }
+            info
         }
         val failed = result.isFailure
         val info = result.getOrNull()

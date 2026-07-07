@@ -30,6 +30,7 @@ class MainViewModel @Inject constructor(
             if (s.setupCompleted) {
                 fetchScheduler.schedulePeriodic(s.fetch)
                 alarmScheduler.rescheduleClassAlarms()
+                alarmScheduler.scheduleNextClassWidgetUpdate()
                 if (s.notifications.dailySummary) {
                     alarmScheduler.scheduleDailySummary(
                         s.notifications.dailySummaryHour,

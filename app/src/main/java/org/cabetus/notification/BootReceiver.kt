@@ -38,6 +38,7 @@ class BootReceiver : BroadcastReceiver() {
                 if (!s.setupCompleted) return@launch
                 fetchScheduler.schedulePeriodic(s.fetch)
                 alarmScheduler.rescheduleClassAlarms()
+                alarmScheduler.scheduleNextClassWidgetUpdate()
                 if (s.notifications.dailySummary) {
                     alarmScheduler.scheduleDailySummary(
                         s.notifications.dailySummaryHour,
