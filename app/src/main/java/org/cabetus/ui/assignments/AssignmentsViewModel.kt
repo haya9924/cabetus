@@ -29,14 +29,23 @@ enum class DueFilter(val label: String, val windowMillis: Long?) {
     D7("7日以内", 7L * 24 * 60 * 60 * 1000),
 }
 
+/** 期日順表示の区切り。label = null は見出しなし（検出順など）。 */
+data class AssignmentSection(
+    val label: String?,
+    val items: List<AssignmentEntity>,
+)
+
 data class AssignmentsUiState(
-    val assignments: List<AssignmentEntity> = emptyList(),
+    val sections: List<AssignmentSection> = emptyList(),
     val courses: List<String> = emptyList(),
     val sortMode: SortMode = SortMode.DEADLINE,
     val statusFilter: StatusFilter = StatusFilter.PENDING,
     val selectedCourses: Set<String> = emptySet(),
     val dueFilter: DueFilter = DueFilter.ALL,
-)
+) {
+    /** 全課題のフラット表示（空判定などに使用）。 */
+    val assignments: List<AssignmentEntity> get() = sections.flatMap { it.items }
+}
 
 @HiltViewModel
 class AssignmentsViewModel @Inject constructor(
@@ -90,7 +99,18 @@ class AssignmentsViewModel @Inject constructor(
             SortMode.DEADLINE -> list.sortedWith(compareBy(nullsLast()) { it.deadline })
             SortMode.DETECTED -> list.sortedByDescending { it.firstSeenAt }
         }
-        AssignmentsUiState(list, courses, f.sort, f.status, f.courses, f.due)
+        val sections = when (f.sort) {
+            // 期日順は「期限切れ/24時間以内/…」でグルーピングして見出しを付ける。
+            SortMode.DEADLINE -> {
+                val now = System.currentTimeMillis()
+                list.groupBy { sectionLabel(it.deadline, now) }
+                    .map { (label, items) -> AssignmentSection(label, items) }
+            }
+            // 検出順は見出しなしの単一セクション。
+            SortMode.DETECTED ->
+                if (list.isEmpty()) emptyList() else listOf(AssignmentSection(null, list))
+        }
+        AssignmentsUiState(sections, courses, f.sort, f.status, f.courses, f.due)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AssignmentsUiState())
 
     /** 取得（手動/定期）が実行中かどうか。上部プログレスバー用。 */
@@ -119,5 +139,19 @@ class AssignmentsViewModel @Inject constructor(
 
     fun setIgnored(id: String, ignored: Boolean) {
         viewModelScope.launch { assignmentDao.setIgnored(id, ignored) }
+    }
+
+    companion object {
+        private const val DAY = 24L * 60 * 60 * 1000
+
+        /** 期日を「期限切れ/24時間以内/3日以内/7日以内/それ以降/期限なし」のいずれかに分類する。 */
+        fun sectionLabel(deadline: Long?, now: Long): String = when {
+            deadline == null -> "期限なし"
+            deadline < now -> "期限切れ"
+            deadline <= now + DAY -> "24時間以内"
+            deadline <= now + 3 * DAY -> "3日以内"
+            deadline <= now + 7 * DAY -> "7日以内"
+            else -> "それ以降"
+        }
     }
 }

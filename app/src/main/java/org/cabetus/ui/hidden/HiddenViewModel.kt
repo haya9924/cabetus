@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.cabetus.data.local.AssignmentDao
@@ -25,8 +26,16 @@ class HiddenViewModel @Inject constructor(
         assignmentDao.observeIgnored()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val courses: StateFlow<List<MoodleCourseEntity>> =
+    /** 非表示にしているコース（enabled = false）。管理画面のリスト表示用。 */
+    val hiddenCourses: StateFlow<List<MoodleCourseEntity>> =
         moodleCourseDao.observeAll()
+            .map { list -> list.filter { !it.enabled } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** 表示中のコース（enabled = true）。「コースを追加」ダイアログの候補用。 */
+    val visibleCourses: StateFlow<List<MoodleCourseEntity>> =
+        moodleCourseDao.observeAll()
+            .map { list -> list.filter { it.enabled } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** 課題を再表示する。 */
@@ -34,10 +43,18 @@ class HiddenViewModel @Inject constructor(
         viewModelScope.launch { assignmentDao.setIgnored(id, false) }
     }
 
-    /** コースの表示/非表示を切り替え、ウィジェットも即時更新する。 */
-    fun setCourseHidden(id: String, hidden: Boolean) {
+    /** コースを非表示にし、ウィジェットも即時更新する。 */
+    fun hideCourse(id: String) {
         viewModelScope.launch {
-            moodleCourseDao.setEnabled(id, !hidden)
+            moodleCourseDao.setEnabled(id, false)
+            widgetUpdater.updateAll()
+        }
+    }
+
+    /** コースを再表示し、ウィジェットも即時更新する。 */
+    fun restoreCourse(id: String) {
+        viewModelScope.launch {
+            moodleCourseDao.setEnabled(id, true)
             widgetUpdater.updateAll()
         }
     }

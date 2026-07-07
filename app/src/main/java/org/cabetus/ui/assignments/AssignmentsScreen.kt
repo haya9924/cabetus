@@ -2,28 +2,32 @@ package org.cabetus.ui.assignments
 
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
@@ -76,46 +80,21 @@ fun AssignmentsScreen(
             if (isRefreshing) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-            // ソート・ステータス
+            // 並び替え・絞り込みの 2 ボタン
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                SortMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = state.sortMode == mode,
-                        onClick = { viewModel.setSort(mode) },
-                        label = { Text(mode.label) },
-                    )
-                }
-                StatusFilter.entries.forEach { f ->
-                    FilterChip(
-                        selected = state.statusFilter == f,
-                        onClick = { viewModel.setStatusFilter(f) },
-                        label = { Text(f.label) },
-                    )
-                }
-            }
-            // 期日フィルタ
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                DueFilter.entries.forEach { f ->
-                    FilterChip(
-                        selected = state.dueFilter == f,
-                        onClick = { viewModel.setDueFilter(f) },
-                        label = { Text(f.label) },
-                    )
-                }
-            }
-            // 科目絞り込み（複数選択プルダウン）
-            if (state.courses.isNotEmpty()) {
-                CourseFilterDropdown(
-                    courses = state.courses,
-                    selected = state.selectedCourses,
-                    onToggle = viewModel::toggleCourse,
-                    onClear = viewModel::clearCourses,
+                SortButton(
+                    current = state.sortMode,
+                    onSelect = viewModel::setSort,
+                )
+                FilterButton(
+                    state = state,
+                    onStatus = viewModel::setStatusFilter,
+                    onDue = viewModel::setDueFilter,
+                    onToggleCourse = viewModel::toggleCourse,
+                    onClearCourses = viewModel::clearCourses,
                 )
             }
 
@@ -131,18 +110,27 @@ fun AssignmentsScreen(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(state.assignments, key = { it.id }) { a ->
-                        AssignmentCard(
-                            a = a,
-                            onOpen = {
-                                if (a.url.isNotBlank()) {
-                                    runCatching {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, a.url.toUri()))
+                    state.sections.forEach { section ->
+                        if (section.label != null) {
+                            item(key = "header-${section.label}") {
+                                SectionHeader(section.label)
+                            }
+                        }
+                        items(section.items, key = { it.id }) { a ->
+                            AssignmentCard(
+                                a = a,
+                                onOpen = {
+                                    if (a.url.isNotBlank()) {
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, a.url.toUri()),
+                                            )
+                                        }
                                     }
-                                }
-                            },
-                            onIgnore = { viewModel.setIgnored(a.id, true) },
-                        )
+                                },
+                                onIgnore = { viewModel.setIgnored(a.id, true) },
+                            )
+                        }
                     }
                 }
             }
@@ -150,48 +138,130 @@ fun AssignmentsScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CourseFilterDropdown(
-    courses: List<String>,
-    selected: Set<String>,
-    onToggle: (String) -> Unit,
-    onClear: () -> Unit,
+private fun SectionHeader(label: String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        HorizontalDivider()
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun SortButton(
+    current: SortMode,
+    onSelect: (SortMode) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val label = if (selected.isEmpty()) "すべての科目" else "${selected.size}科目を選択中"
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-    ) {
-        OutlinedTextField(
-            value = label,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("科目で絞り込み") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier
-                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                .fillMaxWidth(),
+    Box {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text("並び替え: ${current.label}") },
+            leadingIcon = {
+                Icon(
+                    Icons.AutoMirrored.Filled.Sort,
+                    contentDescription = null,
+                    Modifier.size(AssistChipDefaults.IconSize),
+                )
+            },
         )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                leadingIcon = { Checkbox(checked = selected.isEmpty(), onCheckedChange = null) },
-                text = { Text("すべて") },
-                onClick = { onClear() },
-            )
-            courses.forEach { course ->
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            SortMode.entries.forEach { mode ->
                 DropdownMenuItem(
                     leadingIcon = {
-                        Checkbox(checked = course in selected, onCheckedChange = null)
+                        RadioButton(selected = current == mode, onClick = null)
                     },
-                    text = { Text(course, maxLines = 1) },
-                    onClick = { onToggle(course) },
+                    text = { Text(mode.label) },
+                    onClick = {
+                        onSelect(mode)
+                        expanded = false
+                    },
                 )
             }
         }
     }
+}
+
+@Composable
+private fun FilterButton(
+    state: AssignmentsUiState,
+    onStatus: (StatusFilter) -> Unit,
+    onDue: (DueFilter) -> Unit,
+    onToggleCourse: (String) -> Unit,
+    onClearCourses: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val activeCount = (if (state.statusFilter != StatusFilter.PENDING) 1 else 0) +
+        (if (state.dueFilter != DueFilter.ALL) 1 else 0) +
+        state.selectedCourses.size
+    val label = if (activeCount == 0) "絞り込み" else "絞り込み ($activeCount)"
+
+    Box {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text(label) },
+            leadingIcon = {
+                Icon(
+                    Icons.Filled.FilterList,
+                    contentDescription = null,
+                    Modifier.size(AssistChipDefaults.IconSize),
+                )
+            },
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            MenuSectionLabel("ステータス")
+            StatusFilter.entries.forEach { f ->
+                DropdownMenuItem(
+                    leadingIcon = { RadioButton(selected = state.statusFilter == f, onClick = null) },
+                    text = { Text(f.label) },
+                    onClick = { onStatus(f) },
+                )
+            }
+            HorizontalDivider()
+            MenuSectionLabel("期日")
+            DueFilter.entries.forEach { f ->
+                DropdownMenuItem(
+                    leadingIcon = { RadioButton(selected = state.dueFilter == f, onClick = null) },
+                    text = { Text(f.label) },
+                    onClick = { onDue(f) },
+                )
+            }
+            if (state.courses.isNotEmpty()) {
+                HorizontalDivider()
+                MenuSectionLabel("科目")
+                DropdownMenuItem(
+                    leadingIcon = {
+                        Checkbox(checked = state.selectedCourses.isEmpty(), onCheckedChange = null)
+                    },
+                    text = { Text("すべて") },
+                    onClick = { onClearCourses() },
+                )
+                state.courses.forEach { course ->
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Checkbox(checked = course in state.selectedCourses, onCheckedChange = null)
+                        },
+                        text = { Text(course, maxLines = 1) },
+                        onClick = { onToggleCourse(course) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuSectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
