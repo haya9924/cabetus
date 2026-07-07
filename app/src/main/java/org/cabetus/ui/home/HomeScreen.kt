@@ -94,36 +94,64 @@ private fun WeatherCard(
     onRefresh: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(weather?.emoji ?: "🌡️", fontSize = 40.sp)
-            Column(Modifier.weight(1f)) {
-                Text(dateLabel, style = MaterialTheme.typography.labelMedium)
-                if (weather != null) {
-                    Text(
-                        "${weather.label}  ${weather.currentTemp?.let { "${it.toInt()}℃" } ?: ""}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        buildString {
-                            weather.maxTemp?.let { append("最高 ${it.toInt()}℃ ") }
-                            weather.minTemp?.let { append("最低 ${it.toInt()}℃ ") }
-                            weather.precipProbability?.let { append("降水 ${it}%") }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                } else {
-                    Text("天気を取得できませんでした", style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(weather?.emoji ?: "🌡️", fontSize = 40.sp)
+                Column(Modifier.weight(1f)) {
+                    Text(dateLabel, style = MaterialTheme.typography.labelMedium)
+                    if (weather != null) {
+                        Text(
+                            "${weather.label}  ${weather.currentTemp?.let { "${it.toInt()}℃" } ?: ""}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            buildString {
+                                weather.maxTemp?.let { append("最高 ${it.toInt()}℃ ") }
+                                weather.minTemp?.let { append("最低 ${it.toInt()}℃ ") }
+                                weather.precipProbability?.let { append("降水 ${it}%") }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        Text("天気を取得できませんでした", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "更新")
                 }
             }
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Filled.Refresh, contentDescription = "更新")
+            if (weather != null && weather.hourly.isNotEmpty()) {
+                androidx.compose.material3.HorizontalDivider()
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    weather.hourly.forEach { h -> HourlyCell(h) }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun HourlyCell(h: org.cabetus.data.weather.HourlyForecast) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(h.hourLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(h.emoji, fontSize = 20.sp)
+        Text(h.temp?.let { "${it}℃" } ?: "—", style = MaterialTheme.typography.bodySmall)
+        Text(
+            h.precip?.let { "${it}%" } ?: "",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
     }
 }
 

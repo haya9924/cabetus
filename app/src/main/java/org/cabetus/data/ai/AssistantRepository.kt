@@ -46,7 +46,7 @@ class AssistantRepository @Inject constructor(
             val requestJson = ChatRequest(
                 model = settings.model,
                 messages = listOf(
-                    ChatMessage("system", SYSTEM_PROMPT),
+                    ChatMessage("system", buildSystemPrompt(settings)),
                     ChatMessage("user", prompt),
                 ),
                 temperature = 0.7,
@@ -77,6 +77,19 @@ class AssistantRepository @Inject constructor(
                 AssistantResult.Error(e.message ?: "通信エラー")
             }
         }
+
+    /** 標準プロンプトに口調プリセット・カスタム命令を足す（カスタム命令を最後に置き優先させる）。 */
+    private fun buildSystemPrompt(settings: AiSettings): String = buildString {
+        append(SYSTEM_PROMPT)
+        if (settings.tone.instruction.isNotBlank()) {
+            appendLine()
+            append(settings.tone.instruction)
+        }
+        if (settings.customInstruction.isNotBlank()) {
+            appendLine()
+            append("追加の指示: ${settings.customInstruction}")
+        }
+    }
 
     private fun buildPrompt(c: AssistantContext): String = buildString {
         appendLine("今日は${c.dateLabel}です。")

@@ -17,6 +17,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import org.cabetus.ui.assignments.AssignmentsScreen
+import org.cabetus.ui.hidden.HiddenScreen
 import org.cabetus.ui.home.HomeScreen
 import org.cabetus.ui.login.LoginScreen
 import org.cabetus.ui.more.MoreScreen
@@ -83,7 +84,11 @@ fun MainScaffold(
                     onOpenAssignments = { navController.navigate(TopTab.ASSIGNMENTS.route) },
                 )
             }
-            composable(TopTab.ASSIGNMENTS.route) { AssignmentsScreen() }
+            composable(TopTab.ASSIGNMENTS.route) {
+                AssignmentsScreen(
+                    onOpenHidden = { navController.navigate(Routes.HIDDEN) },
+                )
+            }
             composable(TopTab.TIMETABLE.route) {
                 TimetableScreen(
                     onOpenSyllabus = { code -> navController.navigate("${Routes.SYLLABUS}/$code") },
@@ -99,6 +104,9 @@ fun MainScaffold(
                     onOpenLogin = { navController.navigate(Routes.LOGIN) },
                     onOpenPdfImport = { navController.navigate(Routes.PDF_IMPORT) },
                 )
+            }
+            composable(Routes.HIDDEN) {
+                HiddenScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.LOGIN) {
                 LoginScreen(onDone = { navController.popBackStack() })

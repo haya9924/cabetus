@@ -13,11 +13,16 @@ class WidgetUpdater @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     suspend fun updateAll() {
+        val manager = GlanceAppWidgetManager(context)
+        // 配置済みウィジェットが無ければ何もしない。各ウィジェットは独立して runCatching。
         runCatching {
-            // 配置済みウィジェットが無ければ何もしない
-            val ids = GlanceAppWidgetManager(context).getGlanceIds(AssignmentWidget::class.java)
-            if (ids.isNotEmpty()) {
+            if (manager.getGlanceIds(AssignmentWidget::class.java).isNotEmpty()) {
                 AssignmentWidget().updateAll(context)
+            }
+        }
+        runCatching {
+            if (manager.getGlanceIds(NextClassWidget::class.java).isNotEmpty()) {
+                NextClassWidget().updateAll(context)
             }
         }
     }

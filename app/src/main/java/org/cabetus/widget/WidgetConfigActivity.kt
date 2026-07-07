@@ -104,8 +104,8 @@ class WidgetConfigActivity : ComponentActivity() {
 
     private fun save(opacity: Int, scheme: WidgetColorScheme) {
         lifecycleScope.launch {
-            val glanceId = androidx.glance.appwidget.GlanceAppWidgetManager(this@WidgetConfigActivity)
-                .getGlanceIdBy(appWidgetId)
+            val manager = androidx.glance.appwidget.GlanceAppWidgetManager(this@WidgetConfigActivity)
+            val glanceId = manager.getGlanceIdBy(appWidgetId)
             updateAppWidgetState(
                 this@WidgetConfigActivity,
                 PreferencesGlanceStateDefinition,
@@ -116,7 +116,12 @@ class WidgetConfigActivity : ComponentActivity() {
                     this[WidgetConfig.KEY_COLOR] = scheme.name
                 }
             }
-            AssignmentWidget().update(this@WidgetConfigActivity, glanceId)
+            // どちらのウィジェットの設定かを判定して正しい方を更新する
+            if (glanceId in manager.getGlanceIds(NextClassWidget::class.java)) {
+                NextClassWidget().update(this@WidgetConfigActivity, glanceId)
+            } else {
+                AssignmentWidget().update(this@WidgetConfigActivity, glanceId)
+            }
 
             setResult(
                 Activity.RESULT_OK,

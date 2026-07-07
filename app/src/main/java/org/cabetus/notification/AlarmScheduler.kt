@@ -10,7 +10,10 @@ import org.cabetus.data.local.ClassCourseDao
 import org.cabetus.data.local.ClassSessionDao
 import org.cabetus.data.local.TimetableDao
 import org.cabetus.data.settings.SettingsRepository
+import org.cabetus.domain.NextClassResolver
 import org.cabetus.domain.PeriodTimes
+import org.cabetus.widget.NextClassWidget
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
 import java.time.LocalDate
@@ -123,6 +126,55 @@ class AlarmScheduler @Inject constructor(
         pending?.let { am?.cancel(it) }
     }
 
+    /**
+     * 「次の授業」ウィジェットを次のコマ境界（授業開始/終了時刻）で自動更新するアラームを登録する。
+     * 授業中ならその終了時刻、休み時間なら次のコマ開始時刻に発火する。発火のたびに
+     * AlarmReceiver から再登録され、コマ境界をまたぐたびに表示（授業中↔次の授業）が追従する。
+     * ウィジェットが未配置なら既存アラームを解除して何もしない。
+     */
+    suspend fun scheduleNextClassWidgetUpdate() {
+        val placed = runCatching {
+            GlanceAppWidgetManager(context).getGlanceIds(NextClassWidget::class.java).isNotEmpty()
+        }.getOrDefault(false)
+        if (!placed) {
+            cancelNextClassWidgetUpdate()
+            return
+        }
+        val cells = timetableDao.getAll()
+        val nowDt = LocalDateTime.now(zone)
+        val info = NextClassResolver.resolve(cells, nowDt) ?: return
+        // 授業中→終了時刻で「次の授業」に、休み時間→開始時刻で「授業中」に切り替わる
+        val boundary = if (info.isOngoing) info.end else info.start
+        val today = LocalDate.now(zone)
+        var triggerAt: Long? = null
+        for (offset in 0..8) {
+            val date = today.plusDays(offset.toLong())
+            if (date.dayOfWeek.value != info.dayOfWeek) continue
+            val dt = LocalDateTime.of(date, boundary)
+            if (dt.isAfter(nowDt)) {
+                triggerAt = dt.atZone(zone).toInstant().toEpochMilli()
+                break
+            }
+        }
+        val at = triggerAt ?: return
+        val intent = Intent(context, AlarmReceiver::class.java)
+            .putExtra(AlarmReceiver.EXTRA_KIND, AlarmReceiver.KIND_NEXT_CLASS_WIDGET)
+        val pending = PendingIntent.getBroadcast(
+            context, NEXT_CLASS_WIDGET_REQUEST_CODE, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        setExact(at, pending)
+    }
+
+    fun cancelNextClassWidgetUpdate() {
+        val intent = Intent(context, AlarmReceiver::class.java)
+        val pending = PendingIntent.getBroadcast(
+            context, NEXT_CLASS_WIDGET_REQUEST_CODE, intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )
+        pending?.let { am?.cancel(it) }
+    }
+
     private fun setExact(triggerAt: Long, pending: PendingIntent) {
         val manager = am ?: return
         val canExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -150,5 +202,6 @@ class AlarmScheduler @Inject constructor(
         const val EXTRA_DATE = "date"
         const val EXTRA_PERIOD = "period"
         private const val DAILY_REQUEST_CODE = 999001
+        private const val NEXT_CLASS_WIDGET_REQUEST_CODE = 999002
     }
 }

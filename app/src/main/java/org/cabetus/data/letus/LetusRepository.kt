@@ -84,8 +84,16 @@ class LetusRepository @Inject constructor(
             val existingBefore = assignmentDao.getAll().associateBy { it.id }
 
             // ① コース発見
+            // discoverCourses() は常に enabled=true で構築するため、
+            // ユーザーが非表示にしたコースの enabled を既存行から引き継いで保持する。
             val courses = discoverCourses()
-            if (courses.isNotEmpty()) courseDao.upsertAll(courses)
+            if (courses.isNotEmpty()) {
+                val existingCourses = courseDao.getAll().associateBy { it.id }
+                val merged = courses.map { c ->
+                    c.copy(enabled = existingCourses[c.id]?.enabled ?: true)
+                }
+                courseDao.upsertAll(merged)
+            }
             val enabled = courseDao.getEnabled()
 
             // ② 課題候補抽出（同時3並列）

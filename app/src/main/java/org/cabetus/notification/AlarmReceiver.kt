@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import org.cabetus.data.settings.SettingsRepository
+import org.cabetus.widget.WidgetUpdater
 import org.cabetus.work.DailySummaryWorker
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,9 @@ class AlarmReceiver : BroadcastReceiver() {
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
+
+    @Inject
+    lateinit var widgetUpdater: WidgetUpdater
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.getStringExtra(EXTRA_KIND)) {
@@ -59,6 +63,19 @@ class AlarmReceiver : BroadcastReceiver() {
                     }
                 }
             }
+
+            KIND_NEXT_CLASS_WIDGET -> {
+                // コマ境界に到達。ウィジェットを再描画し、次の境界を再登録する。
+                val pending = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        widgetUpdater.updateAll()
+                        alarmScheduler.scheduleNextClassWidgetUpdate()
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
         }
     }
 
@@ -66,5 +83,6 @@ class AlarmReceiver : BroadcastReceiver() {
         const val EXTRA_KIND = "kind"
         const val KIND_CLASS_START = "class_start"
         const val KIND_DAILY_SUMMARY = "daily_summary"
+        const val KIND_NEXT_CLASS_WIDGET = "next_class_widget"
     }
 }
