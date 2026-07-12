@@ -19,7 +19,9 @@ import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
+import androidx.glance.layout.defaultWeight
 import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.width
@@ -120,13 +122,18 @@ class NextClassWidget : GlanceAppWidget() {
                 style = TextStyle(color = ColorProvider(accent), fontWeight = FontWeight.Bold),
             )
             Spacer(GlanceModifier.height(4.dp))
+            // 幅が狭くても授業名は必ず1行に収める（溢れは省略記号）
             Text(
                 info.cell.courseName.ifBlank { info.cell.courseCode },
-                maxLines = 2,
+                maxLines = 1,
+                modifier = GlanceModifier.fillMaxWidth(),
                 style = TextStyle(color = ColorProvider(fg), fontWeight = FontWeight.Bold),
             )
-            // 縦幅が小さいので、時限・時間と教室名を横並びにして見切れを防ぐ
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // 時限・時間と教室名を横並びに。時刻側を可変幅にして教室名の表示領域を確保する
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     "%d限 %02d:%02d〜%02d:%02d".format(
                         info.period,
@@ -134,6 +141,7 @@ class NextClassWidget : GlanceAppWidget() {
                         info.end.hour, info.end.minute,
                     ),
                     maxLines = 1,
+                    modifier = GlanceModifier.defaultWeight(),
                     style = TextStyle(color = ColorProvider(fg)),
                 )
                 val room = if (info.cell.isOnline) "オンライン" else (info.cell.room ?: "")
