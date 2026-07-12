@@ -78,7 +78,9 @@ class SettingsViewModel @Inject constructor(
             } else {
                 alarmScheduler.cancelDailySummary()
             }
-            if (n.classStart) {
+            // 授業開始通知・出席リマインダーは同じ授業アラーム経路で登録するため、
+            // どちらかが有効なら再スケジュールする。
+            if (n.classStart || n.attendanceReminder) {
                 alarmScheduler.rescheduleClassAlarms()
             }
         }

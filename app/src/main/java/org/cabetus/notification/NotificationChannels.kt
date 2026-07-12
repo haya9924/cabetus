@@ -9,6 +9,7 @@ import androidx.core.content.getSystemService
 object NotificationChannels {
     const val DAILY_SUMMARY = "daily_summary"
     const val CLASS_START = "class_start"
+    const val ATTENDANCE_REMINDER = "attendance_reminder"
     const val DEADLINE = "deadline"
     const val NEW_ASSIGNMENT = "new_assignment"
     const val FETCH_FAILURE = "fetch_failure"
@@ -23,6 +24,9 @@ object NotificationChannels {
             NotificationChannel(
                 CLASS_START, "授業開始", NotificationManager.IMPORTANCE_HIGH,
             ).apply { description = "授業開始5分前のお知らせ" },
+            NotificationChannel(
+                ATTENDANCE_REMINDER, "出席チェックのリマインド", NotificationManager.IMPORTANCE_HIGH,
+            ).apply { description = "授業終了前に出席が未記録のときのお知らせ" },
             NotificationChannel(
                 DEADLINE, "課題の期日", NotificationManager.IMPORTANCE_HIGH,
             ).apply { description = "課題の期日が近いお知らせ" },

@@ -3,6 +3,7 @@ package org.cabetus.di
 import android.content.Context
 import androidx.room.Room
 import org.cabetus.data.local.AssignmentDao
+import org.cabetus.data.local.AttendanceOverrideDao
 import org.cabetus.data.local.ClassCourseDao
 import org.cabetus.data.local.ClassSessionDao
 import org.cabetus.data.local.LocalAttendanceDao
@@ -26,6 +27,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): TusDatabase =
         Room.databaseBuilder(context, TusDatabase::class.java, "tus.db")
+            .addMigrations(TusDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 
@@ -49,6 +51,10 @@ object AppModule {
 
     @Provides
     fun provideLocalAttendanceDao(db: TusDatabase): LocalAttendanceDao = db.localAttendanceDao()
+
+    @Provides
+    fun provideAttendanceOverrideDao(db: TusDatabase): AttendanceOverrideDao =
+        db.attendanceOverrideDao()
 
     @Provides
     @Singleton

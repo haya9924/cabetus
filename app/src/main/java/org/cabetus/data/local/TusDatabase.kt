@@ -4,6 +4,8 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 class Converters {
     @TypeConverter
@@ -30,8 +32,9 @@ class Converters {
         TimetableCellEntity::class,
         ClassSessionEntity::class,
         LocalAttendanceEntity::class,
+        AttendanceOverrideEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -43,4 +46,28 @@ abstract class TusDatabase : RoomDatabase() {
     abstract fun timetableDao(): TimetableDao
     abstract fun classSessionDao(): ClassSessionDao
     abstract fun localAttendanceDao(): LocalAttendanceDao
+    abstract fun attendanceOverrideDao(): AttendanceOverrideDao
+
+    companion object {
+        /**
+         * v1→v2: 手動修正用テーブル attendance_overrides を追加するだけ。
+         * 既存データには一切触れないため安全（列は Room の期待スキーマと完全一致させる）。
+         */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `attendance_overrides` (
+                        `courseCode` TEXT NOT NULL,
+                        `date` INTEGER NOT NULL,
+                        `period` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`courseCode`, `date`, `period`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+    }
 }

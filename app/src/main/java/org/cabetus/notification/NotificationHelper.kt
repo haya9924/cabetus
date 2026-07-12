@@ -173,6 +173,40 @@ class NotificationHelper @Inject constructor(
         safeNotify(notifId, builder)
     }
 
+    /** 出席チェック忘れのリマインド通知（「出席にカウント」アクション付き）。 */
+    fun notifyAttendanceReminder(
+        courseName: String,
+        room: String?,
+        courseCode: String,
+        date: Long,
+        period: Int,
+        minutesBefore: Int,
+    ) {
+        if (!canPost()) return
+        val notifId = "attend$courseCode$date$period".hashCode()
+        val checkIntent = Intent(context, AttendanceCheckActivity::class.java).apply {
+            putExtra(AttendanceCheckActivity.EXTRA_COURSE_CODE, courseCode)
+            putExtra(AttendanceCheckActivity.EXTRA_DATE, date)
+            putExtra(AttendanceCheckActivity.EXTRA_PERIOD, period)
+            putExtra(AttendanceCheckActivity.EXTRA_NOTIFICATION_ID, notifId)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val checkPending = PendingIntent.getActivity(
+            context, notifId, checkIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val roomText = room?.let { "（$it）" } ?: ""
+        val builder = NotificationCompat.Builder(context, NotificationChannels.ATTENDANCE_REMINDER)
+            .setSmallIcon(smallIcon())
+            .setContentTitle("出席チェックがまだです: $courseName")
+            .setContentText("${period}限$roomText 終了${minutesBefore}分前。出席済みならタップして記録してください")
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(0, "出席にカウント", checkPending)
+            .setContentIntent(openAppIntent(notifId))
+        safeNotify(notifId, builder)
+    }
+
     /** 課題取得中に表示する「更新中」通知（別チャンネル・無音・常駐）。 */
     fun notifyFetchProgress() {
         if (!canPost()) return
