@@ -37,7 +37,13 @@ fun MainScaffold(
 
     LaunchedEffect(pendingRoute) {
         if (pendingRoute != null) {
-            navController.navigate(pendingRoute)
+            // ウィジェット・通知からの遷移。タブ切替と同じオプションで
+            // 重複スタックを作らないようにする（多重に積むとタブが効かなく見える）。
+            navController.navigate(pendingRoute) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
             onPendingConsumed()
         }
     }

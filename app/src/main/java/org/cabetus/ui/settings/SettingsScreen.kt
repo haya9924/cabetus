@@ -444,8 +444,22 @@ private fun NotificationSection(s: AppSettings, vm: SettingsViewModel) {
             )
         }
         SwitchRow("授業開始のお知らせ", n.classStart) { vm.setNotifications(n.copy(classStart = it)) }
+        SwitchRow("出席チェック忘れのお知らせ", n.attendanceReminder) {
+            vm.setNotifications(n.copy(attendanceReminder = it))
+        }
+        if (n.attendanceReminder) {
+            Text("授業終了 ${n.attendanceReminderMinutes} 分前に、出席が未記録なら通知します")
+            Slider(
+                value = n.attendanceReminderMinutes.toFloat(),
+                onValueChange = {
+                    vm.setNotifications(n.copy(attendanceReminderMinutes = (it.toInt() / 5) * 5))
+                },
+                valueRange = 5f..45f, steps = 7,
+            )
+        }
         SwitchRow("課題の期日が近いお知らせ", n.deadline) { vm.setNotifications(n.copy(deadline = it)) }
         SwitchRow("新規課題のお知らせ", n.newAssignment) { vm.setNotifications(n.copy(newAssignment = it)) }
+        SwitchRow("LETUS変更のお知らせ", n.letusChange) { vm.setNotifications(n.copy(letusChange = it)) }
         SwitchRow("取得失敗のお知らせ", n.fetchFailure) { vm.setNotifications(n.copy(fetchFailure = it)) }
     }
 }

@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import org.cabetus.data.letus.AssignmentChange
 import org.cabetus.data.local.AssignmentEntity
 import org.cabetus.data.local.NotifiedKeyDao
 import org.cabetus.data.local.NotifiedKeyEntity
@@ -77,6 +78,33 @@ class NotificationHelper @Inject constructor(
                 title = "新しい課題が${newOnes.size}件",
                 text = "${first.title} ほか",
                 contentIntent = openAppIntent("new_multi".hashCode()),
+            )
+        }
+    }
+
+    /** LETUS 上で既存課題に変更（締切・タイトル）があったときのお知らせ。 */
+    fun notifyAssignmentChanges(changes: List<AssignmentChange>) {
+        if (!canPost() || changes.isEmpty()) return
+        if (changes.size == 1) {
+            val c = changes.first()
+            post(
+                NotificationChannels.LETUS_CHANGE,
+                id = ("chg" + c.assignment.id).hashCode(),
+                title = "課題の変更: ${c.assignment.courseName}",
+                text = "${c.assignment.title}\n${c.changes.joinToString("\n")}",
+                contentIntent = openUrlIntent(c.assignment.url, ("chg" + c.assignment.id).hashCode()),
+            )
+        } else {
+            val first = changes.first()
+            post(
+                NotificationChannels.LETUS_CHANGE,
+                id = "chg_multi".hashCode(),
+                title = "課題に${changes.size}件の変更",
+                text = "${first.assignment.title} ほか",
+                contentIntent = openAppIntent(
+                    "chg_multi".hashCode(),
+                    MainActivity.EXTRA_NAVIGATE to MainActivity.NAV_ASSIGNMENTS,
+                ),
             )
         }
     }
@@ -166,6 +194,40 @@ class NotificationHelper @Inject constructor(
             .setSmallIcon(smallIcon())
             .setContentTitle("まもなく授業: $courseName")
             .setContentText("${period}限$roomText が始まります")
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(0, "出席にカウント", checkPending)
+            .setContentIntent(openAppIntent(notifId))
+        safeNotify(notifId, builder)
+    }
+
+    /** 出席チェック忘れのリマインド通知（「出席にカウント」アクション付き）。 */
+    fun notifyAttendanceReminder(
+        courseName: String,
+        room: String?,
+        courseCode: String,
+        date: Long,
+        period: Int,
+        minutesBefore: Int,
+    ) {
+        if (!canPost()) return
+        val notifId = "attend$courseCode$date$period".hashCode()
+        val checkIntent = Intent(context, AttendanceCheckActivity::class.java).apply {
+            putExtra(AttendanceCheckActivity.EXTRA_COURSE_CODE, courseCode)
+            putExtra(AttendanceCheckActivity.EXTRA_DATE, date)
+            putExtra(AttendanceCheckActivity.EXTRA_PERIOD, period)
+            putExtra(AttendanceCheckActivity.EXTRA_NOTIFICATION_ID, notifId)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val checkPending = PendingIntent.getActivity(
+            context, notifId, checkIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val roomText = room?.let { "（$it）" } ?: ""
+        val builder = NotificationCompat.Builder(context, NotificationChannels.ATTENDANCE_REMINDER)
+            .setSmallIcon(smallIcon())
+            .setContentTitle("出席チェックがまだです: $courseName")
+            .setContentText("${period}限$roomText 終了${minutesBefore}分前。出席済みならタップして記録してください")
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .addAction(0, "出席にカウント", checkPending)

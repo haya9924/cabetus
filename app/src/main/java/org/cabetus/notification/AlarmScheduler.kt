@@ -36,10 +36,13 @@ class AlarmScheduler @Inject constructor(
     private val zone: ZoneId = ZoneId.of("Asia/Tokyo")
     private val am get() = context.getSystemService<AlarmManager>()
 
-    /** 授業開始アラームを今日・明日分について再登録する。 */
+    /** 授業開始アラーム・出席リマインダーを今日・明日分について再登録する。 */
     suspend fun rescheduleClassAlarms() {
         val settings = settingsRepository.current()
-        if (!settings.notifications.classStart) return
+        val classStart = settings.notifications.classStart
+        val reminder = settings.notifications.attendanceReminder
+        val reminderMin = settings.notifications.attendanceReminderMinutes.toLong()
+        if (!classStart && !reminder) return
         val nameByCode = classCourseDao.getAll().associate { it.code to it.name }
         val roomByCodePeriod = timetableDao.getAll()
             .associateBy { it.courseCode to it.period }
@@ -67,14 +70,53 @@ class AlarmScheduler @Inject constructor(
         for (m in meetings) {
             val pt = PeriodTimes.of(m.period) ?: continue
             val dateLocal = Instant.ofEpochMilli(m.date).atZone(zone).toLocalDate()
-            val startDateTime = LocalDateTime.of(dateLocal, pt.start).minusMinutes(5)
-            val triggerAt = startDateTime.atZone(zone).toInstant().toEpochMilli()
-            if (triggerAt <= now) continue
-
             val room = roomByCodePeriod[m.courseCode to m.period]
             val name = nameByCode[m.courseCode] ?: m.courseCode
-            scheduleClassAlarm(triggerAt, m, name, room?.room, room?.isOnline ?: false)
+
+            // 授業開始5分前
+            if (classStart) {
+                val startAt = LocalDateTime.of(dateLocal, pt.start).minusMinutes(5)
+                    .atZone(zone).toInstant().toEpochMilli()
+                if (startAt > now) {
+                    scheduleClassAlarm(startAt, m, name, room?.room, room?.isOnline ?: false)
+                }
+            }
+            // 授業終了 reminderMin 分前（出席チェック忘れリマインド）
+            if (reminder) {
+                val remindAt = LocalDateTime.of(dateLocal, pt.end).minusMinutes(reminderMin)
+                    .atZone(zone).toInstant().toEpochMilli()
+                if (remindAt > now) {
+                    scheduleAttendanceReminder(
+                        remindAt, m, name, room?.room, room?.isOnline ?: false, reminderMin.toInt(),
+                    )
+                }
+            }
         }
+    }
+
+    private fun scheduleAttendanceReminder(
+        triggerAt: Long,
+        m: Meeting,
+        courseName: String,
+        room: String?,
+        isOnline: Boolean,
+        minutesBefore: Int,
+    ) {
+        val requestCode = ("attend${m.courseCode}${m.date}${m.period}").hashCode()
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            putExtra(AlarmReceiver.EXTRA_KIND, AlarmReceiver.KIND_ATTENDANCE_REMINDER)
+            putExtra(EXTRA_COURSE_NAME, courseName)
+            putExtra(EXTRA_ROOM, if (isOnline) "オンライン" else room)
+            putExtra(EXTRA_COURSE_CODE, m.courseCode)
+            putExtra(EXTRA_DATE, m.date)
+            putExtra(EXTRA_PERIOD, m.period)
+            putExtra(EXTRA_MINUTES, minutesBefore)
+        }
+        val pending = PendingIntent.getBroadcast(
+            context, requestCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        setExact(triggerAt, pending)
     }
 
     private fun scheduleClassAlarm(
@@ -201,6 +243,7 @@ class AlarmScheduler @Inject constructor(
         const val EXTRA_COURSE_CODE = "course_code"
         const val EXTRA_DATE = "date"
         const val EXTRA_PERIOD = "period"
+        const val EXTRA_MINUTES = "minutes"
         private const val DAILY_REQUEST_CODE = 999001
         private const val NEXT_CLASS_WIDGET_REQUEST_CODE = 999002
     }

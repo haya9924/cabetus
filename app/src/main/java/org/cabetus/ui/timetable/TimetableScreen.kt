@@ -25,6 +25,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -57,9 +58,10 @@ fun TimetableScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var detail by remember { mutableStateOf<CourseDetail?>(null) }
     var selectedCode by remember { mutableStateOf<String?>(null) }
+    var detailReload by remember { mutableIntStateOf(0) }
     val sheetState = rememberModalBottomSheetState()
 
-    LaunchedEffect(selectedCode) {
+    LaunchedEffect(selectedCode, detailReload) {
         val code = selectedCode
         detail = if (code != null) viewModel.loadDetail(code) else null
     }
@@ -194,6 +196,9 @@ fun TimetableScreen(
             CourseDetailSheet(
                 detail = detail,
                 onOpenSyllabus = { code -> selectedCode = null; onOpenSyllabus(code) },
+                loadRows = viewModel::loadAttendanceRows,
+                setStatus = viewModel::setAttendanceStatus,
+                onChanged = { detailReload++ },
             )
         }
     }

@@ -104,3 +104,16 @@ data class LocalAttendanceEntity(
     val period: Int,
     val checkedAt: Long,
 )
+
+/**
+ * ユーザーが手動で修正した出席状況（PDF・アプリ記録より優先）。
+ * PDF由来データを直接書き換えず上書きとして保存する。status は AttendanceStatus の enum 名。
+ */
+@Entity(tableName = "attendance_overrides", primaryKeys = ["courseCode", "date", "period"])
+data class AttendanceOverrideEntity(
+    val courseCode: String,
+    val date: Long,
+    val period: Int,
+    val status: String,
+    val updatedAt: Long,
+)

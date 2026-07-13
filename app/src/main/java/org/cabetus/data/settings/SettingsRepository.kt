@@ -57,7 +57,13 @@ data class NotificationSettings(
     val classStart: Boolean = true,
     val deadline: Boolean = true,
     val newAssignment: Boolean = true,
+    /** 既存課題の締切・内容が変わったときのお知らせ。 */
+    val letusChange: Boolean = true,
     val fetchFailure: Boolean = true,
+    /** 出席チェック忘れのリマインダー。 */
+    val attendanceReminder: Boolean = true,
+    /** 授業終了の何分前にリマインドするか。 */
+    val attendanceReminderMinutes: Int = 10,
 )
 
 data class AppSettings(
@@ -110,7 +116,10 @@ class SettingsRepository @Inject constructor(
         val N_CLASS_START = booleanPreferencesKey("n_class_start")
         val N_DEADLINE = booleanPreferencesKey("n_deadline")
         val N_NEW = booleanPreferencesKey("n_new")
+        val N_LETUS_CHANGE = booleanPreferencesKey("n_letus_change")
         val N_FAIL = booleanPreferencesKey("n_fail")
+        val N_ATTEND = booleanPreferencesKey("n_attend")
+        val N_ATTEND_MIN = intPreferencesKey("n_attend_min")
 
         val LAST_RESULT = stringPreferencesKey("last_result")
         val LAST_AT = longPreferencesKey("last_at")
@@ -154,7 +163,10 @@ class SettingsRepository @Inject constructor(
             classStart = this[Keys.N_CLASS_START] ?: true,
             deadline = this[Keys.N_DEADLINE] ?: true,
             newAssignment = this[Keys.N_NEW] ?: true,
+            letusChange = this[Keys.N_LETUS_CHANGE] ?: true,
             fetchFailure = this[Keys.N_FAIL] ?: true,
+            attendanceReminder = this[Keys.N_ATTEND] ?: true,
+            attendanceReminderMinutes = this[Keys.N_ATTEND_MIN] ?: 10,
         ),
         skipCounter = this[Keys.SKIP_COUNTER] ?: 0,
         lastFetchResult = this[Keys.LAST_RESULT] ?: "",
@@ -199,7 +211,10 @@ class SettingsRepository @Inject constructor(
         it[Keys.N_CLASS_START] = n.classStart
         it[Keys.N_DEADLINE] = n.deadline
         it[Keys.N_NEW] = n.newAssignment
+        it[Keys.N_LETUS_CHANGE] = n.letusChange
         it[Keys.N_FAIL] = n.fetchFailure
+        it[Keys.N_ATTEND] = n.attendanceReminder
+        it[Keys.N_ATTEND_MIN] = n.attendanceReminderMinutes
     }
 
     suspend fun setSkipCounter(value: Int) = edit { it[Keys.SKIP_COUNTER] = value }

@@ -9,8 +9,10 @@ import androidx.core.content.getSystemService
 object NotificationChannels {
     const val DAILY_SUMMARY = "daily_summary"
     const val CLASS_START = "class_start"
+    const val ATTENDANCE_REMINDER = "attendance_reminder"
     const val DEADLINE = "deadline"
     const val NEW_ASSIGNMENT = "new_assignment"
+    const val LETUS_CHANGE = "letus_change"
     const val FETCH_FAILURE = "fetch_failure"
     const val FETCH_PROGRESS = "fetch_progress"
 
@@ -24,11 +26,17 @@ object NotificationChannels {
                 CLASS_START, "授業開始", NotificationManager.IMPORTANCE_HIGH,
             ).apply { description = "授業開始5分前のお知らせ" },
             NotificationChannel(
+                ATTENDANCE_REMINDER, "出席チェックのリマインド", NotificationManager.IMPORTANCE_HIGH,
+            ).apply { description = "授業終了前に出席が未記録のときのお知らせ" },
+            NotificationChannel(
                 DEADLINE, "課題の期日", NotificationManager.IMPORTANCE_HIGH,
             ).apply { description = "課題の期日が近いお知らせ" },
             NotificationChannel(
                 NEW_ASSIGNMENT, "新規課題", NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "新しい課題が見つかったお知らせ" },
+            NotificationChannel(
+                LETUS_CHANGE, "LETUSの変更", NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply { description = "既存の課題の締切・内容が変わったお知らせ" },
             NotificationChannel(
                 FETCH_FAILURE, "取得の失敗", NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "データ取得に失敗したお知らせ" },

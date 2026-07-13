@@ -155,4 +155,22 @@ interface LocalAttendanceDao {
 
     @Query("SELECT * FROM local_attendance WHERE courseCode = :code")
     suspend fun getForCourse(code: String): List<LocalAttendanceEntity>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM local_attendance WHERE courseCode = :code AND date = :date AND period = :period)")
+    suspend fun exists(code: String, date: Long, period: Int): Boolean
+}
+
+@Dao
+interface AttendanceOverrideDao {
+    @Upsert
+    suspend fun upsert(entity: AttendanceOverrideEntity)
+
+    @Query("DELETE FROM attendance_overrides WHERE courseCode = :code AND date = :date AND period = :period")
+    suspend fun delete(code: String, date: Long, period: Int)
+
+    @Query("SELECT * FROM attendance_overrides WHERE courseCode = :code")
+    suspend fun getForCourse(code: String): List<AttendanceOverrideEntity>
+
+    @Query("SELECT * FROM attendance_overrides WHERE courseCode = :code AND date = :date AND period = :period")
+    suspend fun get(code: String, date: Long, period: Int): AttendanceOverrideEntity?
 }
