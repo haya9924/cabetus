@@ -12,6 +12,7 @@ object NotificationChannels {
     const val ATTENDANCE_REMINDER = "attendance_reminder"
     const val DEADLINE = "deadline"
     const val NEW_ASSIGNMENT = "new_assignment"
+    const val LETUS_CHANGE = "letus_change"
     const val FETCH_FAILURE = "fetch_failure"
     const val FETCH_PROGRESS = "fetch_progress"
 
@@ -33,6 +34,9 @@ object NotificationChannels {
             NotificationChannel(
                 NEW_ASSIGNMENT, "新規課題", NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "新しい課題が見つかったお知らせ" },
+            NotificationChannel(
+                LETUS_CHANGE, "LETUSの変更", NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply { description = "既存の課題の締切・内容が変わったお知らせ" },
             NotificationChannel(
                 FETCH_FAILURE, "取得の失敗", NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "データ取得に失敗したお知らせ" },

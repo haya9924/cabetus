@@ -459,6 +459,7 @@ private fun NotificationSection(s: AppSettings, vm: SettingsViewModel) {
         }
         SwitchRow("課題の期日が近いお知らせ", n.deadline) { vm.setNotifications(n.copy(deadline = it)) }
         SwitchRow("新規課題のお知らせ", n.newAssignment) { vm.setNotifications(n.copy(newAssignment = it)) }
+        SwitchRow("LETUS変更のお知らせ", n.letusChange) { vm.setNotifications(n.copy(letusChange = it)) }
         SwitchRow("取得失敗のお知らせ", n.fetchFailure) { vm.setNotifications(n.copy(fetchFailure = it)) }
     }
 }

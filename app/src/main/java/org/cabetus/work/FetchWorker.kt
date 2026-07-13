@@ -63,6 +63,9 @@ class FetchWorker @AssistedInject constructor(
                     if (settings.notifications.newAssignment) {
                         notificationHelper.notifyNewAssignments(result.newAssignments)
                     }
+                    if (settings.notifications.letusChange) {
+                        notificationHelper.notifyAssignmentChanges(result.changed)
+                    }
                     if (settings.notifications.deadline) {
                         notificationHelper.notifyDeadlineWarnings(result.dueSoon)
                     }

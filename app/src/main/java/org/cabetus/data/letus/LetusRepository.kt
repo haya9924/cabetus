@@ -19,11 +19,19 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** 既存課題に生じた変更（締切・タイトル）。通知の本文組み立てに使う。 */
+data class AssignmentChange(
+    val assignment: AssignmentEntity,
+    /** 人間が読める変更点。例: "締切: 7/12 23:59"。 */
+    val changes: List<String>,
+)
+
 sealed interface FetchResult {
     data class Success(
         val detected: Int,
         val newAssignments: List<AssignmentEntity>,
         val dueSoon: List<AssignmentEntity>,
+        val changed: List<AssignmentChange>,
     ) : FetchResult
 
     data object LoginRequired : FetchResult
@@ -155,8 +163,21 @@ class LetusRepository @Inject constructor(
                     it.deadline in (now + 1)..(now + 24L * 60 * 60 * 1000) &&
                     it.lifecycleStatus == org.cabetus.data.local.LifecycleStatus.ACTIVE
             }
+            // 既存課題の変更（締切・タイトル）を検出。新規は newOnes 側で扱うため除外。
+            // 差分は upsert 前に取得した existingBefore と比較するので、次回は再通知されない。
+            val changed = assignments.mapNotNull { a ->
+                val prev = existingBefore[a.id] ?: return@mapNotNull null
+                if (a.ignored) return@mapNotNull null
+                val diffs = buildList {
+                    if (a.deadlineText.trim() != prev.deadlineText.trim()) {
+                        add("締切: ${a.deadlineText.ifBlank { "なし" }}")
+                    }
+                    if (a.title != prev.title) add("タイトルが変更されました")
+                }
+                if (diffs.isEmpty()) null else AssignmentChange(a, diffs)
+            }
 
-            FetchResult.Success(assignments.size, newOnes, dueSoon)
+            FetchResult.Success(assignments.size, newOnes, dueSoon, changed)
         }
 
     /**
