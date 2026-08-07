@@ -95,6 +95,30 @@ interface NotifiedKeyDao {
 }
 
 @Dao
+interface NotificationHistoryDao {
+    @Insert
+    suspend fun insert(entity: NotificationHistoryEntity): Long
+
+    @Insert
+    suspend fun insertAll(entities: List<NotificationHistoryEntity>)
+
+    @Query("SELECT * FROM notification_history ORDER BY createdAt DESC, id DESC")
+    fun observeAll(): Flow<List<NotificationHistoryEntity>>
+
+    @Query("SELECT COUNT(*) FROM notification_history WHERE read = 0")
+    fun observeUnreadCount(): Flow<Int>
+
+    @Query("UPDATE notification_history SET read = 1")
+    suspend fun markAllRead()
+
+    @Query("DELETE FROM notification_history WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM notification_history")
+    suspend fun clear()
+}
+
+@Dao
 interface ClassCourseDao {
     @Upsert
     suspend fun upsertAll(courses: List<ClassCourseEntity>)

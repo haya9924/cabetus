@@ -8,6 +8,7 @@ import org.cabetus.data.ai.AssistantResult
 import org.cabetus.data.local.AssignmentDao
 import org.cabetus.data.local.AssignmentEntity
 import org.cabetus.data.local.ClassCourseDao
+import org.cabetus.data.local.NotificationHistoryDao
 import org.cabetus.data.local.TimetableDao
 import org.cabetus.data.settings.SettingsRepository
 import org.cabetus.data.weather.WeatherRepository
@@ -57,6 +58,7 @@ class HomeViewModel @Inject constructor(
     private val weatherRepository: WeatherRepository,
     private val assistantRepository: AssistantRepository,
     private val notificationHelper: NotificationHelper,
+    private val notificationHistoryDao: NotificationHistoryDao,
 ) : ViewModel() {
 
     private val dateFmt = DateTimeFormatter.ofPattern("M月d日（E）", Locale.JAPANESE)
@@ -103,6 +105,9 @@ class HomeViewModel @Inject constructor(
 
     private val _weather = MutableStateFlow<WeatherSummary?>(null)
     val weather: StateFlow<WeatherSummary?> = _weather.asStateFlow()
+
+    val unreadCount: StateFlow<Int> = notificationHistoryDao.observeUnreadCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     private val _aiState = MutableStateFlow<AiCardState>(AiCardState.Idle)
     val aiState: StateFlow<AiCardState> = _aiState.asStateFlow()

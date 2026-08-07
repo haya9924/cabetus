@@ -50,6 +50,30 @@ data class NotifiedKeyEntity(
     val createdAt: Long,
 )
 
+/** 通知種別。 */
+enum class NotificationType {
+    NEW_ASSIGNMENT,
+    LETUS_CHANGE,
+    DEADLINE,
+    DAILY_SUMMARY,
+    CLASS_START,
+    ATTENDANCE_REMINDER,
+    FETCH_FAILURE,
+}
+
+/** アプリ内で表示する通知履歴。 */
+@Entity(tableName = "notification_history")
+data class NotificationHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val type: NotificationType,
+    val title: String,
+    val text: String,
+    /** 関連課題のURL。null ならアプリ内遷移のみ。 */
+    val url: String? = null,
+    val createdAt: Long,
+    val read: Boolean = false,
+)
+
 /** CLASS の科目（時間割PDF・出欠PDF由来）。 */
 @Entity(tableName = "class_courses")
 data class ClassCourseEntity(

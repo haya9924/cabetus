@@ -21,6 +21,13 @@ class Converters {
 
     @TypeConverter
     fun fromLifecycle(value: LifecycleStatus?): String? = value?.name
+
+    @TypeConverter
+    fun toNotificationType(value: String?): NotificationType? =
+        value?.let { NotificationType.valueOf(it) }
+
+    @TypeConverter
+    fun fromNotificationType(value: NotificationType?): String? = value?.name
 }
 
 @Database(
@@ -33,8 +40,9 @@ class Converters {
         ClassSessionEntity::class,
         LocalAttendanceEntity::class,
         AttendanceOverrideEntity::class,
+        NotificationHistoryEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -47,6 +55,7 @@ abstract class TusDatabase : RoomDatabase() {
     abstract fun classSessionDao(): ClassSessionDao
     abstract fun localAttendanceDao(): LocalAttendanceDao
     abstract fun attendanceOverrideDao(): AttendanceOverrideDao
+    abstract fun notificationHistoryDao(): NotificationHistoryDao
 
     companion object {
         /**
@@ -64,6 +73,27 @@ abstract class TusDatabase : RoomDatabase() {
                         `status` TEXT NOT NULL,
                         `updatedAt` INTEGER NOT NULL,
                         PRIMARY KEY(`courseCode`, `date`, `period`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        /**
+         * v2→v3: 通知履歴テーブル notification_history を追加するだけ。
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `notification_history` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `text` TEXT NOT NULL,
+                        `url` TEXT,
+                        `createdAt` INTEGER NOT NULL,
+                        `read` INTEGER NOT NULL
                     )
                     """.trimIndent(),
                 )

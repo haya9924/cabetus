@@ -23,6 +23,7 @@ import org.cabetus.ui.login.LoginScreen
 import org.cabetus.ui.more.MoreScreen
 import org.cabetus.ui.nav.Routes
 import org.cabetus.ui.nav.TopTab
+import org.cabetus.ui.notifications.NotificationHistoryScreen
 import org.cabetus.ui.pdf.PdfImportScreen
 import org.cabetus.ui.settings.SettingsScreen
 import org.cabetus.ui.syllabus.SyllabusScreen
@@ -88,6 +89,7 @@ fun MainScaffold(
                 HomeScreen(
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                     onOpenAssignments = { navController.navigate(TopTab.ASSIGNMENTS.route) },
+                    onOpenNotifications = { navController.navigate(Routes.NOTIFICATIONS) },
                 )
             }
             composable(TopTab.ASSIGNMENTS.route) {
@@ -113,6 +115,9 @@ fun MainScaffold(
             }
             composable(Routes.HIDDEN) {
                 HiddenScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.NOTIFICATIONS) {
+                NotificationHistoryScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.LOGIN) {
                 LoginScreen(onDone = { navController.popBackStack() })

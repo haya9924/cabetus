@@ -10,7 +10,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,14 +44,31 @@ import org.cabetus.notification.NotificationHelper
 fun HomeScreen(
     onOpenSettings: () -> Unit,
     onOpenAssignments: () -> Unit,
+    onOpenNotifications: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val weather by viewModel.weather.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
+    val unreadCount by viewModel.unreadCount.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    Scaffold(topBar = { TopAppBar(title = { Text("ホーム") }) }) { padding ->
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("ホーム") },
+            actions = {
+                IconButton(onClick = onOpenNotifications) {
+                    BadgedBox(badge = {
+                        if (unreadCount > 0) {
+                            Badge { Text(if (unreadCount > 99) "99+" else "$unreadCount") }
+                        }
+                    }) {
+                        Icon(Icons.Filled.Notifications, contentDescription = "通知履歴")
+                    }
+                }
+            },
+        )
+    }) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()

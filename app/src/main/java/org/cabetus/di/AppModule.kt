@@ -9,6 +9,7 @@ import org.cabetus.data.local.ClassSessionDao
 import org.cabetus.data.local.LocalAttendanceDao
 import org.cabetus.data.local.MoodleCourseDao
 import org.cabetus.data.local.NotifiedKeyDao
+import org.cabetus.data.local.NotificationHistoryDao
 import org.cabetus.data.local.TimetableDao
 import org.cabetus.data.local.TusDatabase
 import org.cabetus.data.settings.SettingsRepository
@@ -27,7 +28,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): TusDatabase =
         Room.databaseBuilder(context, TusDatabase::class.java, "tus.db")
-            .addMigrations(TusDatabase.MIGRATION_1_2)
+            .addMigrations(TusDatabase.MIGRATION_1_2, TusDatabase.MIGRATION_2_3)
             .fallbackToDestructiveMigration()
             .build()
 
@@ -39,6 +40,10 @@ object AppModule {
 
     @Provides
     fun provideNotifiedKeyDao(db: TusDatabase): NotifiedKeyDao = db.notifiedKeyDao()
+
+    @Provides
+    fun provideNotificationHistoryDao(db: TusDatabase): NotificationHistoryDao =
+        db.notificationHistoryDao()
 
     @Provides
     fun provideClassCourseDao(db: TusDatabase): ClassCourseDao = db.classCourseDao()

@@ -12,10 +12,16 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import org.cabetus.data.letus.AssignmentChange
 import org.cabetus.data.local.AssignmentEntity
+import org.cabetus.data.local.NotificationHistoryDao
+import org.cabetus.data.local.NotificationHistoryEntity
+import org.cabetus.data.local.NotificationType
 import org.cabetus.data.local.NotifiedKeyDao
 import org.cabetus.data.local.NotifiedKeyEntity
 import org.cabetus.ui.MainActivity
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -26,6 +32,7 @@ import javax.inject.Singleton
 class NotificationHelper @Inject constructor(
     @ApplicationContext private val context: Context,
     private val notifiedKeyDao: NotifiedKeyDao,
+    private val notificationHistoryDao: NotificationHistoryDao,
 ) {
     private val nm = NotificationManagerCompat.from(context)
 
@@ -63,6 +70,12 @@ class NotificationHelper @Inject constructor(
         if (!canPost() || newOnes.isEmpty()) return
         if (newOnes.size == 1) {
             val a = newOnes.first()
+            recordHistory(
+                NotificationType.NEW_ASSIGNMENT,
+                "新しい課題: ${a.courseName}",
+                a.title,
+                url = a.url,
+            )
             post(
                 NotificationChannels.NEW_ASSIGNMENT,
                 id = ("new" + a.id).hashCode(),
@@ -72,6 +85,12 @@ class NotificationHelper @Inject constructor(
             )
         } else {
             val first = newOnes.first()
+            recordHistory(
+                NotificationType.NEW_ASSIGNMENT,
+                "新しい課題が${newOnes.size}件",
+                "${first.title} ほか",
+                url = null,
+            )
             post(
                 NotificationChannels.NEW_ASSIGNMENT,
                 id = "new_multi".hashCode(),
@@ -87,6 +106,12 @@ class NotificationHelper @Inject constructor(
         if (!canPost() || changes.isEmpty()) return
         if (changes.size == 1) {
             val c = changes.first()
+            recordHistory(
+                NotificationType.LETUS_CHANGE,
+                "課題の変更: ${c.assignment.courseName}",
+                "${c.assignment.title}\n${c.changes.joinToString("\n")}",
+                url = c.assignment.url,
+            )
             post(
                 NotificationChannels.LETUS_CHANGE,
                 id = ("chg" + c.assignment.id).hashCode(),
@@ -96,6 +121,12 @@ class NotificationHelper @Inject constructor(
             )
         } else {
             val first = changes.first()
+            recordHistory(
+                NotificationType.LETUS_CHANGE,
+                "課題に${changes.size}件の変更",
+                "${first.assignment.title} ほか",
+                url = null,
+            )
             post(
                 NotificationChannels.LETUS_CHANGE,
                 id = "chg_multi".hashCode(),
@@ -128,6 +159,12 @@ class NotificationHelper @Inject constructor(
             }
             val key = "${a.id}:$bucket"
             if (notifiedKeyDao.exists(key)) continue
+            recordHistory(
+                NotificationType.DEADLINE,
+                label,
+                "${a.title}\n${a.courseName}",
+                url = a.url,
+            )
             post(
                 NotificationChannels.DEADLINE,
                 id = key.hashCode(),
@@ -154,11 +191,23 @@ class NotificationHelper @Inject constructor(
                 openAppIntent("fail".hashCode()),
             )
         }
+        recordHistory(
+            NotificationType.FETCH_FAILURE,
+            title,
+            text,
+            url = null,
+        )
         post(NotificationChannels.FETCH_FAILURE, "fail".hashCode(), title, text, intent)
     }
 
     fun notifyDailySummary(text: String) {
         if (!canPost() || text.isBlank()) return
+        recordHistory(
+            NotificationType.DAILY_SUMMARY,
+            "今日のまとめ",
+            text,
+            url = null,
+        )
         post(
             NotificationChannels.DAILY_SUMMARY,
             id = "daily".hashCode(),
@@ -190,6 +239,12 @@ class NotificationHelper @Inject constructor(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val roomText = room?.let { "（$it）" } ?: ""
+        recordHistory(
+            NotificationType.CLASS_START,
+            "まもなく授業: $courseName",
+            "${period}限$roomText が始まります",
+            url = null,
+        )
         val builder = NotificationCompat.Builder(context, NotificationChannels.CLASS_START)
             .setSmallIcon(smallIcon())
             .setContentTitle("まもなく授業: $courseName")
@@ -224,6 +279,12 @@ class NotificationHelper @Inject constructor(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val roomText = room?.let { "（$it）" } ?: ""
+        recordHistory(
+            NotificationType.ATTENDANCE_REMINDER,
+            "出席チェックがまだです: $courseName",
+            "${period}限$roomText 終了${minutesBefore}分前",
+            url = null,
+        )
         val builder = NotificationCompat.Builder(context, NotificationChannels.ATTENDANCE_REMINDER)
             .setSmallIcon(smallIcon())
             .setContentTitle("出席チェックがまだです: $courseName")
@@ -255,6 +316,26 @@ class NotificationHelper @Inject constructor(
         runCatching { nm.cancel(PROGRESS_ID) }
     }
 
+    private fun recordHistory(
+        type: NotificationType,
+        title: String,
+        text: String,
+        url: String?,
+    ) {
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                notificationHistoryDao.insert(
+                    NotificationHistoryEntity(
+                        type = type,
+                        title = title,
+                        text = text,
+                        url = url,
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }
+    }
     private fun post(
         channel: String,
         id: Int,

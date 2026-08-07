@@ -27,4 +27,5 @@ object Routes {
     const val SYLLABUS = "syllabus" // syllabus/{code}
     const val SETUP = "setup"
     const val HIDDEN = "hidden"
+    const val NOTIFICATIONS = "notifications"
 }
