@@ -457,6 +457,9 @@ private fun NotificationSection(s: AppSettings, vm: SettingsViewModel) {
                 valueRange = 5f..45f, steps = 7,
             )
         }
+        SwitchRow("授業終了時に未登録なら欠席として自動記録", n.autoMarkAbsent) {
+            vm.setNotifications(n.copy(autoMarkAbsent = it))
+        }
         SwitchRow("課題の期日が近いお知らせ", n.deadline) { vm.setNotifications(n.copy(deadline = it)) }
         SwitchRow("新規課題のお知らせ", n.newAssignment) { vm.setNotifications(n.copy(newAssignment = it)) }
         SwitchRow("LETUS変更のお知らせ", n.letusChange) { vm.setNotifications(n.copy(letusChange = it)) }

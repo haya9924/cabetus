@@ -6,8 +6,11 @@ import android.content.Intent
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import org.cabetus.data.local.AttendanceOverrideDao
+import org.cabetus.data.local.AttendanceOverrideEntity
+import org.cabetus.data.local.ClassSessionDao
 import org.cabetus.data.local.LocalAttendanceDao
 import org.cabetus.data.settings.SettingsRepository
+import org.cabetus.domain.AttendanceStatus
 import org.cabetus.widget.WidgetUpdater
 import org.cabetus.work.DailySummaryWorker
 import dagger.hilt.android.AndroidEntryPoint
@@ -39,6 +42,9 @@ class AlarmReceiver : BroadcastReceiver() {
 
     @Inject
     lateinit var attendanceOverrideDao: AttendanceOverrideDao
+
+    @Inject
+    lateinit var classSessionDao: ClassSessionDao
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.getStringExtra(EXTRA_KIND)) {
@@ -110,6 +116,41 @@ class AlarmReceiver : BroadcastReceiver() {
                     }
                 }
             }
+
+            KIND_AUTO_ABSENT -> {
+                // 授業終了時点で出席未登録なら自動で欠席として記録する。
+                val courseName = intent.getStringExtra(AlarmScheduler.EXTRA_COURSE_NAME) ?: return
+                val room = intent.getStringExtra(AlarmScheduler.EXTRA_ROOM)
+                val courseCode = intent.getStringExtra(AlarmScheduler.EXTRA_COURSE_CODE) ?: return
+                val date = intent.getLongExtra(AlarmScheduler.EXTRA_DATE, 0L)
+                val period = intent.getIntExtra(AlarmScheduler.EXTRA_PERIOD, 0)
+                val pending = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val s = settingsRepository.current()
+                        if (!s.notifications.autoMarkAbsent) return@launch
+                        val recorded = localAttendanceDao.exists(courseCode, date, period) ||
+                            attendanceOverrideDao.get(courseCode, date, period) != null
+                        // 出欠PDFで既にマーク済みなら自動記録しない
+                        val mark = classSessionDao.getBetween(date, date + DAY_MILLIS)
+                            .firstOrNull { it.courseCode == courseCode && it.period == period }?.mark
+                        if (!recorded && mark.isNullOrBlank()) {
+                            attendanceOverrideDao.upsert(
+                                AttendanceOverrideEntity(
+                                    courseCode = courseCode,
+                                    date = date,
+                                    period = period,
+                                    status = AttendanceStatus.ABSENT.name,
+                                    updatedAt = System.currentTimeMillis(),
+                                ),
+                            )
+                            notificationHelper.notifyAutoAbsent(courseName, room, courseCode, date, period)
+                        }
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
         }
     }
 
@@ -119,5 +160,7 @@ class AlarmReceiver : BroadcastReceiver() {
         const val KIND_DAILY_SUMMARY = "daily_summary"
         const val KIND_NEXT_CLASS_WIDGET = "next_class_widget"
         const val KIND_ATTENDANCE_REMINDER = "attendance_reminder"
+        const val KIND_AUTO_ABSENT = "auto_absent"
+        private const val DAY_MILLIS = 24L * 60 * 60 * 1000
     }
 }

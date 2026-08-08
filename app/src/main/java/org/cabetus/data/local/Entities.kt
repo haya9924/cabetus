@@ -58,6 +58,7 @@ enum class NotificationType {
     DAILY_SUMMARY,
     CLASS_START,
     ATTENDANCE_REMINDER,
+    AUTO_ABSENT,
     FETCH_FAILURE,
 }
 

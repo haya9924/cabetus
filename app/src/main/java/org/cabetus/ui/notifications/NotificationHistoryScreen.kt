@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PersonOff
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.Card
@@ -58,6 +59,7 @@ private fun NotificationType.label(): String = when (this) {
     NotificationType.DAILY_SUMMARY -> "今日のまとめ"
     NotificationType.CLASS_START -> "授業開始"
     NotificationType.ATTENDANCE_REMINDER -> "出席リマインド"
+    NotificationType.AUTO_ABSENT -> "自動欠席"
     NotificationType.FETCH_FAILURE -> "取得の失敗"
 }
 
@@ -68,6 +70,7 @@ private fun NotificationType.icon(): ImageVector = when (this) {
     NotificationType.DAILY_SUMMARY -> Icons.Filled.Notifications
     NotificationType.CLASS_START -> Icons.Filled.School
     NotificationType.ATTENDANCE_REMINDER -> Icons.Filled.FactCheck
+    NotificationType.AUTO_ABSENT -> Icons.Filled.PersonOff
     NotificationType.FETCH_FAILURE -> Icons.Filled.Error
 }
 

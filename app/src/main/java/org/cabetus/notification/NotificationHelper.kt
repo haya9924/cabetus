@@ -296,6 +296,33 @@ class NotificationHelper @Inject constructor(
         safeNotify(notifId, builder)
     }
 
+    /** 授業終了時点で未登録だったため、自動で欠席として記録したときの通知。 */
+    fun notifyAutoAbsent(
+        courseName: String,
+        room: String?,
+        courseCode: String,
+        date: Long,
+        period: Int,
+    ) {
+        if (!canPost()) return
+        val notifId = "autoAbsent$courseCode$date$period".hashCode()
+        val roomText = room?.let { "（$it）" } ?: ""
+        recordHistory(
+            NotificationType.AUTO_ABSENT,
+            "出席未登録: $courseName",
+            "${period}限$roomText を欠席として自動記録しました",
+            url = null,
+        )
+        val builder = NotificationCompat.Builder(context, NotificationChannels.ATTENDANCE_REMINDER)
+            .setSmallIcon(smallIcon())
+            .setContentTitle("出席未登録のため欠席としました")
+            .setContentText("$courseName ${period}限$roomText を欠席として自動記録しました。誤りの場合は時間割から修正できます")
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(openAppIntent(notifId, MainActivity.EXTRA_NAVIGATE to MainActivity.NAV_TIMETABLE))
+        safeNotify(notifId, builder)
+    }
+
     /** 課題取得中に表示する「更新中」通知（別チャンネル・無音・常駐）。 */
     fun notifyFetchProgress() {
         if (!canPost()) return

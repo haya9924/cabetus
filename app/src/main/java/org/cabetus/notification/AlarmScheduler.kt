@@ -41,8 +41,9 @@ class AlarmScheduler @Inject constructor(
         val settings = settingsRepository.current()
         val classStart = settings.notifications.classStart
         val reminder = settings.notifications.attendanceReminder
+        val autoAbsent = settings.notifications.autoMarkAbsent
         val reminderMin = settings.notifications.attendanceReminderMinutes.toLong()
-        if (!classStart && !reminder) return
+        if (!classStart && !reminder && !autoAbsent) return
         val nameByCode = classCourseDao.getAll().associate { it.code to it.name }
         val roomByCodePeriod = timetableDao.getAll()
             .associateBy { it.courseCode to it.period }
@@ -91,7 +92,40 @@ class AlarmScheduler @Inject constructor(
                     )
                 }
             }
+            // 授業終了時刻（未登録なら自動で欠席記録）
+            if (autoAbsent) {
+                val endAt = LocalDateTime.of(dateLocal, pt.end)
+                    .atZone(zone).toInstant().toEpochMilli()
+                if (endAt > now) {
+                    scheduleAutoAbsent(
+                        endAt, m, name, room?.room, room?.isOnline ?: false,
+                    )
+                }
+            }
         }
+    }
+
+    private fun scheduleAutoAbsent(
+        triggerAt: Long,
+        m: Meeting,
+        courseName: String,
+        room: String?,
+        isOnline: Boolean,
+    ) {
+        val requestCode = ("autoAbsent${m.courseCode}${m.date}${m.period}").hashCode()
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            putExtra(AlarmReceiver.EXTRA_KIND, AlarmReceiver.KIND_AUTO_ABSENT)
+            putExtra(EXTRA_COURSE_NAME, courseName)
+            putExtra(EXTRA_ROOM, if (isOnline) "オンライン" else room)
+            putExtra(EXTRA_COURSE_CODE, m.courseCode)
+            putExtra(EXTRA_DATE, m.date)
+            putExtra(EXTRA_PERIOD, m.period)
+        }
+        val pending = PendingIntent.getBroadcast(
+            context, requestCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        setExact(triggerAt, pending)
     }
 
     private fun scheduleAttendanceReminder(

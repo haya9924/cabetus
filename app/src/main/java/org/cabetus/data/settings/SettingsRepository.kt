@@ -64,6 +64,8 @@ data class NotificationSettings(
     val attendanceReminder: Boolean = true,
     /** 授業終了の何分前にリマインドするか。 */
     val attendanceReminderMinutes: Int = 10,
+    /** 授業終了時点で未登録なら自動的に欠席として記録する。 */
+    val autoMarkAbsent: Boolean = true,
 )
 
 data class AppSettings(
@@ -120,6 +122,7 @@ class SettingsRepository @Inject constructor(
         val N_FAIL = booleanPreferencesKey("n_fail")
         val N_ATTEND = booleanPreferencesKey("n_attend")
         val N_ATTEND_MIN = intPreferencesKey("n_attend_min")
+        val N_AUTO_ABSENT = booleanPreferencesKey("n_auto_absent")
 
         val LAST_RESULT = stringPreferencesKey("last_result")
         val LAST_AT = longPreferencesKey("last_at")
@@ -167,6 +170,7 @@ class SettingsRepository @Inject constructor(
             fetchFailure = this[Keys.N_FAIL] ?: true,
             attendanceReminder = this[Keys.N_ATTEND] ?: true,
             attendanceReminderMinutes = this[Keys.N_ATTEND_MIN] ?: 10,
+            autoMarkAbsent = this[Keys.N_AUTO_ABSENT] ?: true,
         ),
         skipCounter = this[Keys.SKIP_COUNTER] ?: 0,
         lastFetchResult = this[Keys.LAST_RESULT] ?: "",
@@ -215,6 +219,7 @@ class SettingsRepository @Inject constructor(
         it[Keys.N_FAIL] = n.fetchFailure
         it[Keys.N_ATTEND] = n.attendanceReminder
         it[Keys.N_ATTEND_MIN] = n.attendanceReminderMinutes
+        it[Keys.N_AUTO_ABSENT] = n.autoMarkAbsent
     }
 
     suspend fun setSkipCounter(value: Int) = edit { it[Keys.SKIP_COUNTER] = value }
