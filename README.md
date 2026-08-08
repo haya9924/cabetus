@@ -97,3 +97,4 @@ export ANDROID_HOME="$HOME/Android/Sdk"
 ## ⚠️ 免責
 
 cabetus は**非公式**アプリであり、東京理科大学とは一切関係ありません。LETUS・CLASS の仕様変更により動作しなくなる可能性があります。出欠・課題の情報は必ず公式サイトでも確認してください。
+cabetus は著作権者の承諾を得て[waiteu-git/lms-task-watcher](https://github.com/waiteu-git/lms-task-watcher)を参考としています。 そのため、リポジトリ全体のMITライセンスとは別に、**このコードの改変・再配布については元の著作権者の意向を十分確認した上で行ってください。**
