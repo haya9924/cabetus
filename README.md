@@ -9,7 +9,7 @@
 LETUS の課題と CLASS の時間割・出欠をまとめて表示する、理科大生（全学部）向けの非公式 Android アプリです。
 神楽坂・葛飾・野田、どのキャンパスでも使えます。
 
-`β1.1`
+`1.1`
 
 [<img src="https://raw.githubusercontent.com/machiav3lli/oandbackupx/034b226cea5c1b30eb4f6a6f313e4dadcbb0ece4/badge_github.png" alt="Get it on GitHub" height="70">](../../releases)
 [<img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="70">](https://github.com/ImranR98/Obtainium)
