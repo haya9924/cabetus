@@ -26,12 +26,29 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
         val failed: Boolean = false,
         val authRequired: Boolean = false,
     )
+    /**
+     * 時間割の初回取り込みモード。
+     *
+     * 年度・学期は画面から取得できないため推定しない（未設定も許容）。既存の時間割がある
+     * 状態では取り込まず、[failed] と [authRequired] で結果を区別する。出欠の保存・通知は行わない。
+     */
+    data class TimetableStatus(
+        val running: Boolean = false,
+        val message: String = "",
+        val insertedCells: Int = 0,
+        val createdCourses: Int = 0,
+        val failed: Boolean = false,
+        val authRequired: Boolean = false,
+        val completedAt: Long? = null,
+    )
     private val mutable = MutableStateFlow(Status())
     val status = mutable.asStateFlow()
     private val mobileMutable = MutableStateFlow(MobileStatus())
     val mobileStatus = mobileMutable.asStateFlow()
     private val scheduleMutable = MutableStateFlow(ScheduleStatus())
     val scheduleStatus = scheduleMutable.asStateFlow()
+    private val timetableMutable = MutableStateFlow(TimetableStatus())
+    val timetableStatus = timetableMutable.asStateFlow()
     private val browserSessionMutable = MutableStateFlow(0L)
     val browserSession = browserSessionMutable
     // Main-thread ownership gate: no second foreground or background WebView during a tour.
@@ -45,16 +62,18 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
         foregroundRequested = true
         foregroundOpened.value = false
         try {
-            if (mobileMutable.value.running || scheduleMutable.value.running) {
+            if (mobileMutable.value.running || scheduleMutable.value.running ||
+                timetableMutable.value.running
+            ) {
                 try {
                     cancel()
                 } catch (_: RuntimeException) {
                     return false
                 }
                 if (kotlinx.coroutines.withTimeoutOrNull(5_000) {
-                        kotlinx.coroutines.flow.combine(mobileStatus, scheduleStatus) { m, s ->
-                            !m.running && !s.running
-                        }.first { it }
+                        kotlinx.coroutines.flow.combine(
+                            mobileStatus, scheduleStatus, timetableStatus,
+                        ) { m, s, t -> !m.running && !s.running && !t.running }.first { it }
                     } == null
                 ) return false
             }
@@ -67,9 +86,11 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
             foregroundRequested = false
         }
     }
-    val isBrowserBusy: Boolean get() = browserOwners > 0 || mutable.value.running || mobileMutable.value.running || scheduleMutable.value.running
+    val isBrowserBusy: Boolean
+        get() = browserOwners > 0 || mutable.value.running || mobileMutable.value.running ||
+            scheduleMutable.value.running || timetableMutable.value.running
     fun browserOpened(): Boolean {
-        if (browserOwners > 0 || mutable.value.running || mobileMutable.value.running || scheduleMutable.value.running) return false
+        if (isBrowserBusy) return false
         browserOwners++
         foregroundOpened.value = true
         return true
@@ -83,6 +104,7 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
         check(!foregroundRequested) { "ブラウザを開いています。" }
         check(!mobileMutable.value.running) { "モバイル出席確認中です。完了してから更新してください。" }
         check(!scheduleMutable.value.running) { "変更通知を確認中です。完了してから更新してください。" }
+        check(!timetableMutable.value.running) { "時間割を取り込み中です。完了してから更新してください。" }
         check(browserOwners == 0) { "CLASSブラウザを閉じてから更新してください。" }
         mutable.value = Status(running = true, message = "CLASSに接続中")
         try {
@@ -128,4 +150,33 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
         }
     }
     internal fun publishSchedule(value: ScheduleStatus) { scheduleMutable.value = value }
+    /**
+     * 既存の時間割が空のときだけ開始する初回取り込み。
+     *
+     * 出欠巡回・モバイル出席確認・変更通知と同じブラウザ枠を同期的に予約し、
+     * 既存モードと同時に実行しない。年度・学期は推定も変更もしない。
+     */
+    fun tryStartInitialTimetable(): Boolean {
+        if (isBrowserBusy || foregroundRequested) return false
+        timetableMutable.value = timetableMutable.value.copy(
+            running = true, failed = false, authRequired = false, message = "時間割を確認中",
+        )
+        return try {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, ClassAttendanceTourService::class.java)
+                    .setAction(ClassAttendanceTourService.TIMETABLE),
+            )
+            true
+        } catch (_: RuntimeException) {
+            timetableMutable.value = timetableMutable.value.copy(
+                running = false,
+                failed = true,
+                completedAt = System.currentTimeMillis(),
+                message = "時間割を取り込めません。アプリを表示して再試行してください。",
+            )
+            false
+        }
+    }
+    internal fun publishTimetable(value: TimetableStatus) { timetableMutable.value = value }
 }

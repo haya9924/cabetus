@@ -12,8 +12,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import org.cabetus.data.classweb.*
+import org.cabetus.data.local.TimetableDao
 import org.cabetus.data.settings.SettingsRepository
+import org.cabetus.notification.AlarmScheduler
 import org.cabetus.notification.ClassAttendanceSyncNotifications
+import org.cabetus.widget.WidgetUpdater
 import org.cabetus.work.ClassAttendanceSyncContract as C
 import javax.inject.Inject
 import kotlin.coroutines.resume
@@ -42,10 +45,19 @@ class ClassAttendanceTourService : Service() {
     private var mobileResult: MobileAttendanceRepository.CaptureResult? = null
     private var schedule = false
     private var scheduleSnapshot: ClassScheduleNoticesDom.Snapshot? = null
+    private var timetable = false
+    /** 時間割モードの結果。null のまま終わった場合は失敗として扱う。 */
+    private var timetableOutcome: ClassAttendanceBackgroundController.TimetableStatus? = null
+    /** 同一 document で入口リンクを二度押さないための世代。 */
+    private var timetableEntryGeneration = -1L
     private var diagnosticLogging = false
     @Inject lateinit var mobileRepository: MobileAttendanceRepository
     @Inject lateinit var networkMonitor: org.cabetus.data.network.NetworkMonitor
     @Inject lateinit var settings: SettingsRepository
+    @Inject lateinit var timetableRepository: ClassTimetableImportRepository
+    @Inject lateinit var timetableDao: TimetableDao
+    @Inject lateinit var alarmScheduler: AlarmScheduler
+    @Inject lateinit var widgetUpdater: WidgetUpdater
 
     override fun onCreate() {
         super.onCreate()
@@ -57,7 +69,7 @@ class ClassAttendanceTourService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == CANCEL) { job?.cancel(); if (job == null) stopSelf(); return START_NOT_STICKY }
-        if (intent?.action != START && intent?.action != MOBILE && intent?.action != SCHEDULE) { stopSelf(); return START_NOT_STICKY }
+        if (intent?.action != START && intent?.action != MOBILE && intent?.action != SCHEDULE && intent?.action != TIMETABLE) { stopSelf(); return START_NOT_STICKY }
         if (job?.isCompleted == false) return START_NOT_STICKY
         terminal = false
         failure = null
@@ -68,13 +80,16 @@ class ClassAttendanceTourService : Service() {
         latest = null
         mobile = intent?.action == MOBILE
         schedule = intent?.action == SCHEDULE
+        timetable = intent?.action == TIMETABLE
         mobileResult = null
         scheduleSnapshot = null
+        timetableOutcome = null
+        timetableEntryGeneration = -1L
         job = scope.launch(start = CoroutineStart.LAZY) {
             var reason: String? = null
             try {
                 foreground()
-                val deadline = if (schedule) 45_000L else if (mobile) 60_000L else 600_000L
+                val deadline = if (schedule) 45_000L else if (timetable) 55_000L else if (mobile) 60_000L else 600_000L
                 withTimeout(deadline) { executeTour() }
             } catch (_: TimeoutCancellationException) {
                 auth = awaitingAuth
@@ -86,7 +101,30 @@ class ClassAttendanceTourService : Service() {
                   reason = failure ?: "CLASSの画面を確認できませんでした。保存済み記録は保持しています。"
               }
             finally {
-                if (schedule) {
+                if (timetable) {
+                    // 出欠の保存・通知は行わない。取り込めた時だけ結果を成功として公開する。
+                    val prior = controller.timetableStatus.value
+                    val outcome = timetableOutcome
+                    try {
+                        release()
+                    } finally {
+                        terminal = true
+                        try {
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                        } finally {
+                            stopSelf()
+                            controller.publishTimetable(
+                                outcome ?: prior.copy(
+                                    running = false,
+                                    failed = true,
+                                    authRequired = auth,
+                                    completedAt = System.currentTimeMillis(),
+                                    message = reason
+                                        ?: "時間割を取り込めませんでした。既存の時間割は変更していません。",
+                                ))
+                        }
+                    }
+                } else if (schedule) {
                     // 出欠の保存・結果通知は行わない。成功時だけ新しい一覧で差し替える。
                     val prior = controller.scheduleStatus.value
                     val parsed = scheduleSnapshot
@@ -146,6 +184,7 @@ class ClassAttendanceTourService : Service() {
         val builder = android.app.Notification.Builder.recoverBuilder(this, notifications.progress(saved, latest?.items?.size ?: 0))
         if (mobile) builder.setContentTitle("出席状況を確認中").setContentText("CLASSの受付表示を読み取っています")
         if (schedule) builder.setContentTitle("変更通知を確認中").setContentText("CLASSの変更通知一覧を確認しています")
+        if (timetable) builder.setContentTitle("時間割を取り込み中").setContentText("CLASSの学生時間割表を確認しています")
         val n = builder.addAction(0, "中止", cancel).build()
         if (Build.VERSION.SDK_INT >= 29) startForeground(C.PROGRESS_NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else startForeground(C.PROGRESS_NOTIFICATION_ID, n)
@@ -154,6 +193,21 @@ class ClassAttendanceTourService : Service() {
         failure = message; auth = authentication; alive = false; job?.cancel()
     }
     private suspend fun executeTour() {
+        if (timetable) {
+            // 既存の時間割があるなら WebView を開かずに終える（UI 側の絞り込みと同じ条件）。
+            val existing = withContext(Dispatchers.IO) { timetableDao.getAll() }
+            if (existing.isNotEmpty()) {
+                timetableOutcome = ClassAttendanceBackgroundController.TimetableStatus(
+                    running = false,
+                    failed = false,
+                    completedAt = System.currentTimeMillis(),
+                    message = "既存の時間割があるため取り込みませんでした。" +
+                        "CLASS の時間割画面から年度・学期を確認できないため、" +
+                        "既存の時間割は変更していません。",
+                )
+                return
+            }
+        }
         host = ClassAttendanceVirtualDisplayHost(this)
         val browser = host!!.create(); view = browser; alive = true
         // Responsive CLASS layouts require a normal phone-width CSS viewport.
@@ -210,6 +264,10 @@ class ClassAttendanceTourService : Service() {
             }
             val invalid = evaluate("(function(){var m=document.querySelector('.mainContent');return !!m && m.textContent.indexOf('別の画面で操作されたため')>=0;})()")
             if (invalid == "true") { fail("CLASSが別画面との同時利用を検出しました。他のCLASS画面を閉じ、ログインを確認して再試行してください。"); currentCoroutineContext().ensureActive() }
+            if (timetable) {
+                if (captureInitialTimetable(browser, url)) return
+                continue
+            }
             val login = evaluate("(function(){return !!document.querySelector('form#loginForm') && !!document.querySelector('a[href*=ShibbolethAuthServlet]');})()")
             if (login == "true") { awaitingAuth = true; continue }
             awaitingAuth = false
@@ -253,6 +311,47 @@ class ClassAttendanceTourService : Service() {
             is ClassAttendanceTourRunner.Outcome.NotStarted -> { failure = outcome.message; error("CLASS tour could not start") }
         }
     }
+    private suspend fun captureInitialTimetable(browser: WebView, url: String): Boolean {
+        val doc = generation
+        fun isCurrent() = alive && !loading && view === browser && generation == doc && browser.url == url
+        if (!isCurrent()) return false
+        if (BrowserUrlPolicy.isClassTimetablePage(url) &&
+            ClassTimetableDomExtractor.parseVerificationResult(evaluate(ClassTimetableDomExtractor.VERIFY_SCRIPT)) == null
+        ) {
+            if (!isCurrent()) return false
+            awaitingAuth = false
+            val parsed = ClassTimetableDomExtractor.parseEvaluationResult(evaluate(ClassTimetableDomExtractor.SCRIPT))
+            if (!isCurrent() || parsed.error != null || parsed.slots.isEmpty()) return false
+            currentCoroutineContext().ensureActive()
+            val result = timetableRepository.save(parsed.slots.map {
+                ClassTimetableSlot(it.dayOfWeek, it.period, it.courseName, it.courseCode, it.room)
+            })
+            if (result.insertedCells == 0 && !result.blocked) return false
+            timetableOutcome = ClassAttendanceBackgroundController.TimetableStatus(
+                insertedCells = result.insertedCells,
+                createdCourses = result.createdCourses,
+                completedAt = System.currentTimeMillis(),
+                message = if (result.blocked) "既存の時間割は変更していません。"
+                    else "時間割を${result.insertedCells}コマ取り込みました。",
+            )
+            if (result.insertedCells > 0) {
+                alarmScheduler.rescheduleClassAlarms()
+                widgetUpdater.updateAll()
+            }
+            return true
+        }
+        if (!isCurrent()) return false
+        if (timetableEntryGeneration != doc && evaluate(ClassTimetableEntryDom.SCRIPT) == "true") {
+            timetableEntryGeneration = doc
+            return false
+        }
+        if (isCurrent()) {
+            val login = evaluate("(function(){return !!document.querySelector('form#loginForm') && !!document.querySelector('a[href*=ShibbolethAuthServlet]');})()")
+            if (isCurrent()) awaitingAuth = login == "true"
+        }
+        return false
+    }
+
     private suspend fun captureMobile(): Boolean {
         val initial = networkMonitor.status.first()
         check(initial.isKnown && initial.isConnected)
@@ -294,8 +393,16 @@ class ClassAttendanceTourService : Service() {
         if (!terminal && mobile) controller.publishMobile(ClassAttendanceBackgroundController.MobileStatus(message = "取得できません"))
         if (!terminal && schedule) controller.publishSchedule(
             controller.scheduleStatus.value.copy(running = false, failed = true, authRequired = auth))
-        if (!terminal && !mobile && !schedule) controller.publish(ClassAttendanceBackgroundController.Status(message = "更新が停止しました。保存済み記録は保持しています。", saved = saved))
+        if (!terminal && timetable) controller.publishTimetable(
+            controller.timetableStatus.value.copy(running = false, failed = true, authRequired = auth))
+        if (!terminal && !mobile && !schedule && !timetable) controller.publish(ClassAttendanceBackgroundController.Status(message = "更新が停止しました。保存済み記録は保持しています。", saved = saved))
         super.onDestroy()
     }
-    companion object { const val MOBILE = "org.cabetus.classTour.MOBILE"; const val SCHEDULE = "org.cabetus.classTour.SCHEDULE"; const val START = "org.cabetus.classTour.START"; const val CANCEL = "org.cabetus.classTour.CANCEL" }
+    companion object {
+        const val MOBILE = "org.cabetus.classTour.MOBILE"
+        const val SCHEDULE = "org.cabetus.classTour.SCHEDULE"
+        const val TIMETABLE = "org.cabetus.classTour.TIMETABLE"
+        const val START = "org.cabetus.classTour.START"
+        const val CANCEL = "org.cabetus.classTour.CANCEL"
+    }
 }
