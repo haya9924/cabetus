@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +53,9 @@ private val HUNDRED: BigDecimal = BigDecimal.valueOf(100)
 private const val DEFAULT_TARGET_GP = 2
 private const val DEFAULT_MAX = "100"
 private val TARGET_GPS = listOf(4, 3, 2, 1)
+private const val NUMERIC_INPUT_LIMIT = 16
+private val DECIMAL_INPUT = Regex("-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)")
+private val COUNT_INPUT = Regex("-?[0-9]+")
 
 private enum class GpMode { PREDICT, REQUIRE }
 
@@ -140,7 +144,7 @@ private fun GpItemInput.displayName(): String =
 
 private fun parseWeight(text: String): BigDecimal? {
     val trimmed = text.trim()
-    val value = if (trimmed.isEmpty()) BigDecimal.ZERO else trimmed.toBigDecimalOrNull() ?: return null
+    val value = if (trimmed.isEmpty()) BigDecimal.ZERO else parseDecimal(trimmed) ?: return null
     return value.takeIf { it.signum() >= 0 && it <= HUNDRED }
 }
 
@@ -154,20 +158,19 @@ private fun gradeForGp(gp: Int): Grade = when (gp) {
     else -> Grade.C
 }
 
-private fun sanitizeDecimal(input: String, maxLength: Int): String {
-    val builder = StringBuilder()
-    var dotSeen = false
+private fun parseDecimal(text: String): BigDecimal? =
+    text.takeIf(DECIMAL_INPUT::matches)?.toBigDecimalOrNull()
+
+// 全角数字は受け付けるが、符号や小数点などを削って別の値に変えない。
+private fun normalizeNumber(input: String): String = buildString(input.length) {
     for (char in input) {
-        when {
-            char.isDigit() -> builder.append(char)
-            char == '.' && !dotSeen -> {
-                dotSeen = true
-                builder.append(char)
-            }
-        }
-        if (builder.length >= maxLength) break
+        append(when (char) {
+            in '０'..'９' -> '0' + (char - '０')
+            '．' -> '.'
+            '－', '−' -> '-'
+            else -> char
+        })
     }
-    return builder.toString()
 }
 
 private fun parseCountField(
@@ -183,7 +186,7 @@ private fun parseCountField(
         issues += "「$label」の$fieldを入力してください。"
         return null
     }
-    val value = trimmed.toIntOrNull()
+    val value = trimmed.takeIf(COUNT_INPUT::matches)?.toIntOrNull()
     if (value == null) {
         issues += "「$label」の$fieldは整数で入力してください。"
         return null
@@ -207,7 +210,7 @@ private fun parseDecimalField(
         issues += "「$label」の$fieldを入力してください。"
         return null
     }
-    val value = trimmed.toBigDecimalOrNull()
+    val value = parseDecimal(trimmed)
     if (value == null) {
         issues += "「$label」の$fieldは数値で入力してください。"
         return null
@@ -411,6 +414,9 @@ fun GpCalculatorScreen(
         .takeIf { id -> positiveTargets.any { it.id == id } }
         ?: positiveTargets.firstOrNull()?.id
         ?: -1L
+    LaunchedEffect(mode, effectiveTargetId) {
+        if (mode == GpMode.REQUIRE) targetId = effectiveTargetId
+    }
     val targetRow = rows.firstOrNull { it.id == effectiveTargetId }
     val targetOptions = positiveTargets.map { row ->
         TargetOption(
@@ -743,7 +749,7 @@ private fun ResultCard(
                     )
                     if (targetMax != null) {
                         Text(
-                            "満点 ${formatDecimal(targetMax)}点・1点単位で切り上げ",
+                            "満点 ${formatDecimal(targetMax)}点",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -935,7 +941,7 @@ private fun ItemEditor(
 
         OutlinedTextField(
             value = item.weight,
-            onValueChange = { onChange(item.copy(weight = sanitizeDecimal(it, maxLength = 6))) },
+            onValueChange = { if (it.length <= NUMERIC_INPUT_LIMIT) onChange(item.copy(weight = normalizeNumber(it))) },
             label = { Text("比重（空欄は0%）") },
             suffix = { Text("%") },
             singleLine = true,
@@ -1047,7 +1053,7 @@ private fun AttendanceImportSlot(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
-        Text("CLASSから出席を取り込む", style = MaterialTheme.typography.labelLarge)
+        Text("保存済みの出席記録", style = MaterialTheme.typography.labelLarge)
         Text(
             "取り込むと、出席済み回数と終了済み回数だけを更新します。",
             style = MaterialTheme.typography.bodySmall,
@@ -1076,7 +1082,7 @@ private fun DecimalField(
 ) {
     OutlinedTextField(
         value = value,
-        onValueChange = { onChange(sanitizeDecimal(it, maxLength = 8)) },
+        onValueChange = { if (it.length <= NUMERIC_INPUT_LIMIT) onChange(normalizeNumber(it)) },
         label = { Text(label) },
         suffix = { Text(suffix) },
         singleLine = true,
@@ -1094,7 +1100,7 @@ private fun CountField(
 ) {
     OutlinedTextField(
         value = value,
-        onValueChange = { onChange(it.filter(Char::isDigit).take(3)) },
+        onValueChange = { if (it.length <= NUMERIC_INPUT_LIMIT) onChange(normalizeNumber(it)) },
         label = { Text(label) },
         suffix = { Text("回") },
         singleLine = true,
@@ -1146,7 +1152,7 @@ private fun NotesCard() {
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                "・表示する得点は小数2桁で切り捨て、必要得点は1点単位で切り上げます。",
+                "・総合点の表示は小数第2位まで。必要得点は1点単位で切り上げます（小数の満点を超える場合は満点まで）。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
