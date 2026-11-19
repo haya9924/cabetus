@@ -21,6 +21,8 @@ import androidx.navigation.compose.rememberNavController
 import org.cabetus.ui.assignments.AssignmentsScreen
 import org.cabetus.ui.browser.BrowserIntents
 import org.cabetus.ui.browser.BrowserUrlPolicy
+import org.cabetus.ui.gp.GpAttendanceImport
+import org.cabetus.ui.gp.GpCalculatorScreen
 import org.cabetus.ui.hidden.HiddenScreen
 import org.cabetus.ui.home.HomeScreen
 import org.cabetus.ui.login.LoginScreen
@@ -110,9 +112,16 @@ fun MainScaffold(
                 MoreScreen(
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                     onOpenClass = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) },
+                    onOpenGpCalculator = { navController.navigate(Routes.GP_CALCULATOR) },
                 )
             }
 
+            composable(Routes.GP_CALCULATOR) {
+                GpCalculatorScreen(
+                    onBack = { navController.popBackStack() },
+                    attendanceImport = { apply -> GpAttendanceImport(onApply = apply) },
+                )
+            }
             composable(Routes.SETTINGS) {
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
