@@ -15,12 +15,18 @@ android {
         applicationId = "org.cabetus"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.2"
+        versionCode = 3
+        versionName = "1.3-beta.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        // Separately installable preview; does not replace the signed stable app.
+        create("beta") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".beta"
+            matchingFallbacks += listOf("release")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
