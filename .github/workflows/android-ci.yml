@@ -25,9 +25,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Compile Android APKs and run JVM tests
         run: |
-          ./gradlew --no-daemon --no-parallel --max-workers=2 --console=plain \
+          ./gradlew --no-daemon --no-parallel --max-workers=1 --console=plain --stacktrace \
             -Dorg.gradle.java.home="$JAVA_HOME" \
-            '-Dorg.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=512m' \
+            '-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=1g' \
             -Pkotlin.compiler.execution.strategy=in-process \
             :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleBeta
       - uses: actions/upload-artifact@v4
