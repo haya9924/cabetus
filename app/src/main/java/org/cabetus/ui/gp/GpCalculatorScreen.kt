@@ -183,16 +183,16 @@ private fun parseCountField(
 ): Int? {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) {
-        issues += "「$label」の$fieldを入力してください。"
+        issues += "「$label」の${field}を入力してください。"
         return null
     }
     val value = trimmed.takeIf(COUNT_INPUT::matches)?.toIntOrNull()
     if (value == null) {
-        issues += "「$label」の$fieldは整数で入力してください。"
+        issues += "「$label」の${field}は整数で入力してください。"
         return null
     }
     if (value < min || value > max) {
-        issues += "「$label」の$fieldは${min}〜${max}回の範囲で入力してください。"
+        issues += "「$label」の${field}は${min}〜${max}回の範囲で入力してください。"
         return null
     }
     return value
@@ -207,20 +207,20 @@ private fun parseDecimalField(
 ): BigDecimal? {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) {
-        issues += "「$label」の$fieldを入力してください。"
+        issues += "「$label」の${field}を入力してください。"
         return null
     }
     val value = parseDecimal(trimmed)
     if (value == null) {
-        issues += "「$label」の$fieldは数値で入力してください。"
+        issues += "「$label」の${field}は数値で入力してください。"
         return null
     }
     if (mustBePositive && value.signum() <= 0) {
-        issues += "「$label」の$fieldは0より大きい数値で入力してください。"
+        issues += "「$label」の${field}は0より大きい数値で入力してください。"
         return null
     }
     if (!mustBePositive && value.signum() < 0) {
-        issues += "「$label」の$fieldは0以上で入力してください。"
+        issues += "「$label」の${field}は0以上で入力してください。"
         return null
     }
     return value
