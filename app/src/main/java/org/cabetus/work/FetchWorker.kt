@@ -61,7 +61,7 @@ class FetchWorker @AssistedInject constructor(
             return when (result) {
                 is FetchResult.Success -> {
                     if (settings.notifications.newAssignment) {
-                        notificationHelper.notifyNewAssignments(result.newAssignments)
+                        notificationHelper.notifyNewAssignments(result.newAssignments, isInitialImport = result.isInitialImport)
                     }
                     if (settings.notifications.letusChange) {
                         notificationHelper.notifyAssignmentChanges(result.changed)
@@ -70,7 +70,12 @@ class FetchWorker @AssistedInject constructor(
                         notificationHelper.notifyDeadlineWarnings(result.dueSoon)
                     }
                     settingsRepository.setLoggedIn(true)
-                    settingsRepository.setLastFetch("取得成功: ${result.detected}件", now)
+                    val summary = if (result.isPartial) {
+                        "一部取得: ${result.detected}件（${result.failedRequests}件失敗）"
+                    } else {
+                        "取得成功: ${result.detected}件"
+                    }
+                    settingsRepository.setLastFetch(summary, now)
                     widgetUpdater.updateAll()
                     Result.success()
                 }

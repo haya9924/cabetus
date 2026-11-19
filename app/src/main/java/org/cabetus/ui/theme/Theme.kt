@@ -2,6 +2,9 @@ package org.cabetus.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -97,6 +100,13 @@ fun TusTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
+        shapes = Shapes(
+            extraSmall = RoundedCornerShape(6.dp),
+            small = RoundedCornerShape(12.dp),
+            medium = RoundedCornerShape(18.dp),
+            large = RoundedCornerShape(24.dp),
+            extraLarge = RoundedCornerShape(28.dp),
+        ),
         content = content,
     )
 }

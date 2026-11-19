@@ -136,25 +136,87 @@ object LetusParsing {
 
     // ─── 提出状況・ライフサイクル ────────────────────────────
 
+    private fun String.containsAny(patterns: List<Regex>): Boolean =
+        patterns.any { it.containsMatchIn(this) }
+
+    // 否定表現を先に判定する。"not submitted" は "submitted" を含むため、
+    // 肯定表現だけを先に見ると誤って提出済みになる。
+    private val ASSIGN_NOT_SUBMITTED = listOf(
+        Regex("未\\s*提出"),
+        Regex("not\\s+(?:yet\\s+)?submitted"),
+        Regex("unsubmitted"),
+        Regex("no\\s+submission"),
+    )
+    private val ASSIGN_SUBMITTED = listOf(
+        Regex("提出\\s*済"),
+        Regex("\\bsubmitted\\b"),
+    )
+    private val QUIZ_NOT_COMPLETED = listOf(
+        Regex("未\\s*受験"),
+        Regex("未\\s*開始"),
+        Regex("not\\s+(?:yet\\s+)?attempted"),
+        Regex("not\\s+(?:yet\\s+)?started"),
+        Regex("not\\s+finished"),
+        Regex("in\\s+progress"),
+        Regex("受験\\s*中"),
+        Regex("進行\\s*中"),
+        Regex("利用できません"),
+        Regex("not\\s+available"),
+    )
+    private val QUIZ_COMPLETED = listOf(
+        Regex("ステータス\\s*[:：]?\\s*終了"),
+        Regex("status\\s*[:：]?\\s*finished"),
+        Regex("受験\\s*済"),
+        Regex("attempt\\s+finished"),
+    )
+
+    /** 提出状況テーブルのラベル（先頭セル）を正規化する。 */
+    private fun normalizeStatusLabel(cellText: String?): String =
+        normalizeText(cellText).trimEnd(':', '：').trim()
+
+    private fun isSubmissionStatusLabel(label: String): Boolean =
+        label.equals("提出ステータス", ignoreCase = true) ||
+            label.equals("submission status", ignoreCase = true)
+
+    /**
+     * 実際の課題ページ（/mod/assign/view.php）の `.submissionstatustable` から
+     * 提出状況を抽出する。提出ステータス行の値セルだけを見ることで、ページ内の
+     * 他の「未提出」「Submitted」等の文言による汚染を避ける。
+     *
+     * - 課題以外（小テスト等）は従来どおり本文からの判定を維持する。
+     * - 権威行が無ければ従来のプレーンテキスト判定にフォールバックする。
+     * - 権威行が複数、または値セルが2つでない場合は UNKNOWN。
+     */
+    fun extractSubmissionStatusFromHtml(html: String, url: String): SubmissionStatus {
+        if (!url.lowercase().contains("/mod/assign/")) {
+            return extractSubmissionStatus(htmlToPlainText(html), url)
+        }
+        val rows = Jsoup.parse(html).select(".submissionstatustable tr")
+        var matched = 0
+        var malformed = false
+        var value: String? = null
+        for (row in rows) {
+            val cells = row.children().filter { it.tagName() == "th" || it.tagName() == "td" }
+            if (!isSubmissionStatusLabel(normalizeStatusLabel(cells.firstOrNull()?.text()))) continue
+            matched++
+            if (cells.size == 2) value = cells[1].text() else malformed = true
+        }
+        if (matched > 1 || malformed) return SubmissionStatus.UNKNOWN
+        if (matched == 1) return extractSubmissionStatus(value.orEmpty(), url)
+        return extractSubmissionStatus(htmlToPlainText(html), url)
+    }
+
     fun extractSubmissionStatus(plainText: String, url: String): SubmissionStatus {
         val text = normalizeText(plainText).lowercase()
         val isQuiz = url.lowercase().contains("/mod/quiz/")
         if (isQuiz) {
-            if (text.contains("ステータス 終了") || text.contains("status finished")) {
-                return SubmissionStatus.COMPLETED
-            }
-            if (text.contains("受験済み") || text.contains("attempt finished")) {
-                return SubmissionStatus.COMPLETED
-            }
-            if (text.contains("利用できません") || text.contains("not available") ||
-                text.contains("未受験") || text.contains("not attempted")
-            ) {
-                return SubmissionStatus.NOT_SUBMITTED
-            }
+            // "not finished" は "finished" を含むため、完了判定より先に確認する。
+            if (text.containsAny(QUIZ_NOT_COMPLETED)) return SubmissionStatus.NOT_SUBMITTED
+            if (text.containsAny(QUIZ_COMPLETED)) return SubmissionStatus.COMPLETED
             return SubmissionStatus.UNKNOWN
         }
-        if (text.contains("提出済み") || text.contains("submitted")) return SubmissionStatus.SUBMITTED
-        if (text.contains("未提出") || text.contains("not submitted")) return SubmissionStatus.NOT_SUBMITTED
+        if (text.containsAny(ASSIGN_NOT_SUBMITTED)) return SubmissionStatus.NOT_SUBMITTED
+        if (text.containsAny(ASSIGN_SUBMITTED)) return SubmissionStatus.SUBMITTED
         return SubmissionStatus.UNKNOWN
     }
 
@@ -191,8 +253,10 @@ object LetusParsing {
             .replace("=", "").replace("+", "-").replace("/", "_")
     }
 
-    fun isNotLoggedInPage(html: String): Boolean =
-        LetusConstants.NOT_LOGGED_IN_MARKERS.any { html.contains(it) }
+    fun isNotLoggedInPage(html: String): Boolean {
+        val body = html.lowercase()
+        return LetusConstants.NOT_LOGGED_IN_MARKERS.any { body.contains(it.lowercase()) }
+    }
 
     // ─── ログイン判定（実測フローに基づく） ────────────────────────
 
@@ -235,12 +299,20 @@ object LetusParsing {
      * 形式: [{"error":false,"data":{"courses":[{"id":..,"fullname":"..","viewurl":".."}]}}]
      * エラー時・想定外の形式なら空リスト。
      */
-    fun parseEnrolledCourses(body: String): List<Link> = runCatching {
+    fun parseEnrolledCourses(body: String): List<Link> =
+        parseEnrolledCoursesOrNull(body).orEmpty()
+
+    /**
+     * [parseEnrolledCourses] と同じだが、通信は成功したがレスポンスが
+     * エラー/想定外だった場合に null を返す。呼び出し側が「0件」と
+     * 「取得失敗」を区別できるようにするためのもの。
+     */
+    fun parseEnrolledCoursesOrNull(body: String): List<Link>? = runCatching {
         val root = json.parseToJsonElement(body).jsonArray
-        val first = root.firstOrNull()?.jsonObject ?: return emptyList()
+        val first = root.firstOrNull()?.jsonObject ?: return null
         val isError = first["error"]?.jsonPrimitive?.content == "true"
-        if (isError) return emptyList()
-        val courses = first["data"]?.jsonObject?.get("courses")?.jsonArray ?: return emptyList()
+        if (isError) return null
+        val courses = first["data"]?.jsonObject?.get("courses")?.jsonArray ?: return null
         courses.mapNotNull { el ->
             val obj = el.jsonObject
             val url = obj["viewurl"]?.jsonPrimitive?.content ?: return@mapNotNull null
@@ -249,5 +321,5 @@ object LetusParsing {
             val name = normalizeText(Jsoup.parse(rawName).text())
             if (name.isEmpty()) null else Link(name, url.substringBefore('#'))
         }
-    }.getOrDefault(emptyList())
+    }.getOrNull()
 }

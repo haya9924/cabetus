@@ -52,9 +52,11 @@ private val DATE_FMT: DateTimeFormatter =
 fun CourseDetailSheet(
     detail: CourseDetail?,
     onOpenSyllabus: (String) -> Unit,
+    onOpenLetus: (String) -> Unit,
     loadRows: suspend (String) -> List<AttendanceRowUi>,
     setStatus: suspend (String, Long, Int, AttendanceStatus?) -> Unit,
     onChanged: () -> Unit,
+    confirmationRevision: List<org.cabetus.data.local.MobileAttendanceConfirmationEntity> = emptyList(),
 ) {
     Column(
         modifier = Modifier
@@ -123,6 +125,12 @@ fun CourseDetailSheet(
             Text("  詳細・修正")
         }
 
+        detail.letusCourseUrl?.let { url ->
+            OutlinedButton(onClick = { onOpenLetus(url) }, modifier = Modifier.fillMaxWidth()) {
+                Text("この授業のLETUSコースを開く")
+            }
+        }
+
         Button(
             onClick = { onOpenSyllabus(detail.code) },
             modifier = Modifier.fillMaxWidth(),
@@ -133,7 +141,7 @@ fun CourseDetailSheet(
         }
         if (detail.academicYear <= 0) {
             Text(
-                "シラバスを開くには先に出欠PDFを取り込んで年度を設定してください。",
+                "シラバスを開くには設定画面で年度を設定してください。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -147,6 +155,7 @@ fun CourseDetailSheet(
                 setStatus = setStatus,
                 onChanged = onChanged,
                 onDismiss = { showAttendanceDialog = false },
+                confirmationRevision = confirmationRevision,
             )
         }
     }
@@ -160,18 +169,39 @@ private fun AttendanceDetailDialog(
     setStatus: suspend (String, Long, Int, AttendanceStatus?) -> Unit,
     onChanged: () -> Unit,
     onDismiss: () -> Unit,
+    confirmationRevision: List<org.cabetus.data.local.MobileAttendanceConfirmationEntity>,
 ) {
     val scope = rememberCoroutineScope()
     var rows by remember { mutableStateOf<List<AttendanceRowUi>?>(null) }
     var reloadTrigger by remember { mutableIntStateOf(0) }
+    var loadedAt by remember { mutableStateOf<Long?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
 
-    androidx.compose.runtime.LaunchedEffect(reloadTrigger) {
-        rows = loadRows(code)
+    androidx.compose.runtime.LaunchedEffect(code, reloadTrigger, confirmationRevision) {
+        try {
+            rows = loadRows(code)
+            loadedAt = System.currentTimeMillis()
+            loadError = null
+        } catch (_: Exception) { loadError = "記録の再読込に失敗しました。" }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("出席状況の確認・修正") },
+        title = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("出席状況", modifier = Modifier.weight(1f))
+                    TextButton(onClick = { reloadTrigger++; onChanged() }) { Text("更新") }
+                }
+                loadedAt?.let { time ->
+                    val label = java.time.format.DateTimeFormatter.ofPattern("M/d HH:mm:ss")
+                        .withZone(ZoneId.of("Asia/Tokyo")).format(Instant.ofEpochMilli(time))
+                    Text("アプリ内記録の読込：$label", style = MaterialTheme.typography.labelSmall)
+                }
+                Text("CLASSからの取得ではありません（プレビューのみ）", style = MaterialTheme.typography.labelSmall)
+                loadError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
+            }
+        },
         text = {
             val current = rows
             when {
@@ -182,7 +212,7 @@ private fun AttendanceDetailDialog(
                 }
                 current.isEmpty() -> {
                     Text(
-                        "記録がありません。出欠PDFの取り込み、または授業開始通知の「出席にカウント」で記録するとここに表示されます。",
+                        "記録がありません。授業開始通知の「出席にカウント」で記録できます。CLASSブラウザの出欠詳細は現在プレビューのみです。",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -221,7 +251,7 @@ private fun AttendanceRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { menuOpen = true }
+                .clickable(enabled = row.source != AttendanceSource.MOBILE_REGISTRATION) { menuOpen = true }
                 .padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -279,9 +309,11 @@ private fun AttendanceRow(
 }
 
 private fun sourceNote(source: AttendanceSource): String? = when (source) {
+    AttendanceSource.MOBILE_REGISTRATION -> "出席登録画面で確認（最優先・手動変更不可）"
     AttendanceSource.MANUAL -> "手動修正"
     AttendanceSource.LOCAL -> "アプリ記録"
-    AttendanceSource.PDF -> "CLASS の記録"
+    AttendanceSource.PDF -> "過去の取込記録"
+    AttendanceSource.CLASS -> "CLASS取得記録"
     AttendanceSource.NONE -> null
 }
 

@@ -31,13 +31,20 @@ object SilentReAuth {
                     webView.settings.domStorageEnabled = true
 
                     var settled = false
+                    val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
                     fun finish(result: Boolean) {
+                        check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
                         if (settled) return
                         settled = true
-                        CookieManager.getInstance().flush()
-                        webView.stopLoading()
-                        webView.destroy()
-                        if (cont.isActive) cont.resume(result)
+                        try {
+                            if (result) CookieManager.getInstance().flush()
+                        } finally {
+                            try { webView.stopLoading() }
+                            finally {
+                                webView.destroy()
+                                if (cont.isActive) cont.resume(result)
+                            }
+                        }
                     }
 
                     webView.webViewClient = object : WebViewClient() {
@@ -52,7 +59,11 @@ object SilentReAuth {
                             }
                         }
                     }
-                    cont.invokeOnCancellation { finish(false) }
+                    // Cancellation handlers run on the cancelling thread (e.g. WM.task),
+                    // not necessarily on the continuation's Main dispatcher.
+                    cont.invokeOnCancellation {
+                        mainHandler.post { finish(false) }
+                    }
                     webView.loadUrl(LetusConstants.MY_URL)
                 }
             } ?: false

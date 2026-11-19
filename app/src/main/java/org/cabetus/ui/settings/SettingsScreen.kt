@@ -7,6 +7,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,11 +16,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -30,6 +34,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,6 +47,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -48,6 +57,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.cabetus.data.settings.AppSettings
 import org.cabetus.data.settings.FetchFrequency
+import org.cabetus.data.settings.TimetableColorMode
 import org.cabetus.domain.Campus
 import org.cabetus.ui.theme.ThemeMode
 import java.time.Instant
@@ -59,7 +69,6 @@ import java.time.format.DateTimeFormatter
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenLogin: () -> Unit,
-    onOpenPdfImport: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -88,9 +97,18 @@ fun SettingsScreen(
         ) {
             AutoFetchSection(s, viewModel)
             LoginSection(s, onOpenLogin)
-            PdfSection(onOpenPdfImport)
+            AcademicYearSection(s, viewModel)
+            TimetableColorSection(s, viewModel)
+            SourceSection()
             CampusSection(s, viewModel)
             ThemeSection(s, viewModel)
+            TonalSectionCard("デバッグ") {
+                SwitchRow("CLASS出席の診断ログ", s.diagnosticLogging, viewModel::setDiagnosticLogging)
+                Text(
+                    "読み取り結果の件数やエラー種別を端末ログに記録します。認証情報や画面の内容は記録しません。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             AiSection(s, aiTest, viewModel)
             NotificationSection(s, viewModel)
             AboutSection()
@@ -122,6 +140,24 @@ private fun AboutSection() {
 private fun SectionCard(title: String, content: @Composable () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+            content()
+        }
+    }
+}
+
+/** M3 の tonal 表現（角丸大きめ・surfaceContainerHigh）を使うカード。 */
+@Composable
+private fun TonalSectionCard(title: String, content: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
             content()
         }
@@ -190,11 +226,250 @@ private fun LoginSection(s: AppSettings, onOpenLogin: () -> Unit) {
 }
 
 @Composable
-private fun PdfSection(onOpenPdfImport: () -> Unit) {
-    SectionCard("時間割・出欠PDF") {
-        OutlinedButton(onClick = onOpenPdfImport, modifier = Modifier.fillMaxWidth()) {
-            Text("PDFを再インポート")
+private fun AcademicYearSection(s: AppSettings, vm: SettingsViewModel) {
+    val input by vm.academicYearInput.collectAsStateWithLifecycle()
+    val saving by vm.academicYearSaving.collectAsStateWithLifecycle()
+    val error by vm.academicYearError.collectAsStateWithLifecycle()
+    val range = vm.academicYearRange
+
+    // 保存済みの値を初期表示に使う。保存後は input が null に戻り、再び保存値が出る。
+    val savedText = if (s.academicYear > 0) s.academicYear.toString() else ""
+    val text = input ?: savedText
+
+    TonalSectionCard("年度") {
+        Text(
+            "時間割・シラバス・出席集計に使う年度です。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            value = text,
+            onValueChange = vm::setAcademicYearInput,
+            label = { Text("年度（${range.first}〜${range.last}）") },
+            singleLine = true,
+            isError = error != null,
+            enabled = !saving,
+            supportingText = {
+                Text(error ?: "西暦4桁の整数で入力してください。")
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            onClick = vm::saveAcademicYear,
+            enabled = !saving && text.isNotBlank(),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (saving) "保存中…" else "年度を保存")
         }
+        Text(
+            "年度はこの設定画面でのみ変更できます。年度を変更しても、保存済みの時間割や出席の記録は" +
+                "削除されません。年度別の切り替えも行わず、登録済みのデータはそのまま残ります。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun SourceSection() {
+    TonalSectionCard("データの取得元") {
+        Text(
+            "LETUSはログイン後に取得します。CLASSの時間割はブラウザから取り込みます。" +
+                "出欠の詳細はブラウザ上でのプレビューのみで、自動同期には対応していません。",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+/** 手動配色で選べる淡色（緑・青・紫・橙・桃・水色）。 */
+private data class TimetableColorPreset(val label: String, val argb: Int)
+
+private val TIMETABLE_COLOR_PRESETS = listOf(
+    TimetableColorPreset("緑", 0xFFC8E6C9.toInt()),
+    TimetableColorPreset("青", 0xFFBBDEFB.toInt()),
+    TimetableColorPreset("紫", 0xFFD1C4E9.toInt()),
+    TimetableColorPreset("橙", 0xFFFFE0B2.toInt()),
+    TimetableColorPreset("桃", 0xFFF8BBD0.toInt()),
+    TimetableColorPreset("水色", 0xFFB2EBF2.toInt()),
+)
+
+/**
+ * 時間割の配色。自動（出席率）か手動（科目ごとに選ぶ）を切り替える。
+ *
+ * 手動の色は 表示中の年度 + 科目コード で保存する。年度が未設定なら色の変更はできない。
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun TimetableColorSection(s: AppSettings, vm: SettingsViewModel) {
+    val courses by vm.timetableCourses.collectAsStateWithLifecycle()
+    val colors by vm.timetableCourseColors.collectAsStateWithLifecycle()
+    val modeError by vm.timetableColorModeError.collectAsStateWithLifecycle()
+    val colorError by vm.timetableColorError.collectAsStateWithLifecycle()
+
+    val year = s.academicYear
+    val yearReady = year > 0
+
+    TonalSectionCard("時間割の配色") {
+        Text(
+            "時間割の科目の色を決めます。" +
+                "出席率が不明な科目は中立色、欠席2回以下は赤を優先して表示します。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            TimetableColorMode.entries.forEach { mode ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { vm.setTimetableColorMode(mode) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = s.timetableColorMode == mode,
+                        onClick = { vm.setTimetableColorMode(mode) },
+                    )
+                    Text(
+                        when (mode) {
+                            TimetableColorMode.ATTENDANCE_RATE -> "出席率から自動で決める"
+                            TimetableColorMode.MANUAL -> "科目ごとに手動で選ぶ"
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        modeError?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        if (s.timetableColorMode == TimetableColorMode.MANUAL) {
+            if (!yearReady) {
+                Text(
+                    "年度が未設定のため、科目の色は変更できません。先に上の「年度」を保存してください。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (courses.isEmpty()) {
+                Text(
+                    "時間割に科目が登録されていません。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            courses.forEach { course ->
+                val key = if (yearReady) runCatching {
+                    org.cabetus.data.settings.timetableColorKey(year, course.code)
+                }.getOrNull() else null
+                val selectedArgb = key?.let { colors[it] }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        course.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        TIMETABLE_COLOR_PRESETS.forEach { preset ->
+                            TimetableColorSwatch(
+                                preset = preset,
+                                courseName = course.name,
+                                isSelected = selectedArgb == preset.argb,
+                                enabled = yearReady,
+                                onClick = {
+                                    val next = if (selectedArgb == preset.argb) null else preset.argb
+                                    vm.setTimetableCourseColor(year, course.code, next)
+                                },
+                            )
+                        }
+                        TimetableClearSwatch(
+                            courseName = course.name,
+                            isSelected = selectedArgb == null,
+                            enabled = yearReady,
+                            onClick = { vm.setTimetableCourseColor(year, course.code, null) },
+                        )
+                    }
+                }
+            }
+            colorError?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (colorError != null) TextButton(onClick = vm::clearTimetableColorErrors) { Text("エラー表示を消す") }
+        }
+    }
+}
+
+@Composable
+private fun TimetableColorSwatch(
+    preset: TimetableColorPreset,
+    courseName: String,
+    isSelected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val label = "$courseName ${preset.label}" +
+        if (isSelected) "（選択中。押すと解除）" else "（押すと選択）"
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color(preset.argb))
+            .border(
+                if (isSelected) 3.dp else 1.dp,
+                if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                CircleShape,
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics {
+                contentDescription = label
+                stateDescription = if (isSelected) "選択中" else "未選択"
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (isSelected) {
+            Text("✓", style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+@Composable
+private fun TimetableClearSwatch(
+    courseName: String,
+    isSelected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .border(
+                if (isSelected) 3.dp else 1.dp,
+                if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline,
+                CircleShape,
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics {
+                contentDescription = "$courseName 色を解除"
+                stateDescription = if (isSelected) "選択中" else "未選択"
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("解除", style = MaterialTheme.typography.labelSmall)
     }
 }
 

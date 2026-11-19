@@ -23,7 +23,6 @@ enum class TopTab(
 object Routes {
     const val SETTINGS = "settings"
     const val LOGIN = "login"
-    const val PDF_IMPORT = "pdf_import"
     const val SYLLABUS = "syllabus" // syllabus/{code}
     const val SETUP = "setup"
     const val HIDDEN = "hidden"

@@ -18,6 +18,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import java.time.Clock
 import javax.inject.Singleton
 
 @Module
@@ -28,8 +29,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): TusDatabase =
         Room.databaseBuilder(context, TusDatabase::class.java, "tus.db")
-            .addMigrations(TusDatabase.MIGRATION_1_2, TusDatabase.MIGRATION_2_3)
-            .fallbackToDestructiveMigration()
+            .addMigrations(TusDatabase.MIGRATION_1_2, TusDatabase.MIGRATION_2_3, TusDatabase.MIGRATION_3_4, TusDatabase.MIGRATION_4_5)
             .build()
 
     @Provides
@@ -44,6 +44,12 @@ object AppModule {
     @Provides
     fun provideNotificationHistoryDao(db: TusDatabase): NotificationHistoryDao =
         db.notificationHistoryDao()
+
+    @Provides
+    fun provideClassWebAttendanceDao(db: TusDatabase): org.cabetus.data.local.ClassWebAttendanceDao = db.classWebAttendanceDao()
+
+    @Provides
+    fun provideMobileAttendanceConfirmationDao(db: TusDatabase): org.cabetus.data.local.MobileAttendanceConfirmationDao = db.mobileAttendanceConfirmationDao()
 
     @Provides
     fun provideClassCourseDao(db: TusDatabase): ClassCourseDao = db.classCourseDao()
@@ -65,4 +71,12 @@ object AppModule {
     @Singleton
     fun provideSettingsRepository(@ApplicationContext context: Context): SettingsRepository =
         SettingsRepository(context)
+
+    /**
+     * 現在時刻の取得元。端末のローカル時刻をそのまま使う。
+     * テスト・将来の差し替えのため DI 経由で渡す（リポジトリ側で既定値を持たせない）。
+     */
+    @Provides
+    @Singleton
+    fun provideClock(): Clock = Clock.systemDefaultZone()
 }

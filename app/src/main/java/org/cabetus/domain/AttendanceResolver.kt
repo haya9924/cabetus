@@ -9,8 +9,11 @@ enum class AttendanceStatus(val label: String) {
     UNRECORDED("未記録"),
 }
 
-/** 出席状況の判定根拠。 */
+/** 出席状況の判定根拠。優先順位は宣言順（先頭ほど強い）。 */
 enum class AttendanceSource {
+    /** モバイルからの出席登録。最優先。 */
+    MOBILE_REGISTRATION,
+
     /** ユーザーの手動修正。 */
     MANUAL,
 
@@ -20,13 +23,16 @@ enum class AttendanceSource {
     /** 出欠PDF由来のマーク。 */
     PDF,
 
+    /** CLASSで取得した記録。 */
+    CLASS,
+
     /** どこにも記録がない。 */
     NONE,
 }
 
 /**
  * 出欠マーク・アプリ記録・手動修正から実効的な出席状況を求める純粋関数群。JVM テスト可能。
- * 優先順位: 手動修正 > アプリ記録（=出席） > PDFマーク。
+ * 優先順位: モバイル出席登録 > 手動修正 > アプリ記録（=出席） > PDFマーク。
  */
 object AttendanceResolver {
 
@@ -48,15 +54,22 @@ object AttendanceResolver {
 
     /**
      * 各種ソースから実効ステータスを解決する。
+     * 優先順位: モバイル出席登録 > 手動修正 > アプリ記録 > PDFマーク。
      * @param mark PDF由来マーク（なければ null）
      * @param hasLocalCheck アプリの「出席にカウント」記録があるか
      * @param overrideStatus 手動修正（なければ null）
+     * @param hasMobileConfirmation モバイルからの出席登録があるか（既定 false）。
+     *   true なら他のすべてのソースより優先して「出席」を返す。
      */
     fun resolve(
         mark: String?,
         hasLocalCheck: Boolean,
         overrideStatus: AttendanceStatus?,
+        hasMobileConfirmation: Boolean = false,
     ): Resolved {
+        if (hasMobileConfirmation) {
+            return Resolved(AttendanceStatus.PRESENT, AttendanceSource.MOBILE_REGISTRATION)
+        }
         if (overrideStatus != null) return Resolved(overrideStatus, AttendanceSource.MANUAL)
         if (hasLocalCheck) return Resolved(AttendanceStatus.PRESENT, AttendanceSource.LOCAL)
         val fromMark = fromMark(mark)

@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PersonOff
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.School
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -38,11 +39,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.cabetus.data.local.NotificationHistoryEntity
 import org.cabetus.data.local.NotificationType
+import org.cabetus.ui.browser.BrowserIntents
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -61,6 +62,7 @@ private fun NotificationType.label(): String = when (this) {
     NotificationType.ATTENDANCE_REMINDER -> "出席リマインド"
     NotificationType.AUTO_ABSENT -> "自動欠席"
     NotificationType.FETCH_FAILURE -> "取得の失敗"
+    NotificationType.ATTENDANCE_RISK -> "欠席リスク"
 }
 
 private fun NotificationType.icon(): ImageVector = when (this) {
@@ -72,6 +74,7 @@ private fun NotificationType.icon(): ImageVector = when (this) {
     NotificationType.ATTENDANCE_REMINDER -> Icons.Filled.FactCheck
     NotificationType.AUTO_ABSENT -> Icons.Filled.PersonOff
     NotificationType.FETCH_FAILURE -> Icons.Filled.Error
+    NotificationType.ATTENDANCE_RISK -> Icons.Filled.Warning
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -135,15 +138,13 @@ fun NotificationHistoryScreen(
                         item = item,
                         onClick = {
                             viewModel.markAllRead()
-                            item.url?.let { url ->
-                                runCatching {
-                                    context.startActivity(
-                                        android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            url.toUri(),
-                                        ),
-                                    )
-                                }
+                            val url = item.url
+                            if (!url.isNullOrBlank()) {
+                                BrowserIntents.open(context, url)
+                            } else if (item.type == NotificationType.NEW_ASSIGNMENT) {
+                                context.startActivity(android.content.Intent(context, org.cabetus.ui.MainActivity::class.java)
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    .putExtra(org.cabetus.ui.MainActivity.EXTRA_NAVIGATE, org.cabetus.ui.MainActivity.NAV_ASSIGNMENTS))
                             }
                         },
                         onDelete = { viewModel.delete(item.id) },

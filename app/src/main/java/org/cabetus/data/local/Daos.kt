@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -11,6 +12,25 @@ import kotlinx.coroutines.flow.Flow
 interface MoodleCourseDao {
     @Upsert
     suspend fun upsertAll(courses: List<MoodleCourseEntity>)
+
+    /** 未登録コースのみ追加する。既存行（ユーザーの enabled 設定）は変更しない。 */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertDiscovered(courses: List<MoodleCourseEntity>)
+
+    /** 表示名・URL・更新時刻のみ更新する。enabled には触れない。 */
+    @Query("UPDATE moodle_courses SET name = :name, url = :url, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateMetadata(id: String, name: String, url: String, updatedAt: Long)
+
+    /**
+     * コース発見結果を既存データと競合させずに反映する。
+     * 新規は enabled = true で追加し、既存はメタデータのみ更新する。
+     */
+    @Transaction
+    suspend fun mergeDiscovered(courses: List<MoodleCourseEntity>) {
+        if (courses.isEmpty()) return
+        insertDiscovered(courses)
+        courses.forEach { updateMetadata(it.id, it.name, it.url, it.updatedAt) }
+    }
 
     @Query("SELECT * FROM moodle_courses WHERE enabled = 1")
     suspend fun getEnabled(): List<MoodleCourseEntity>
@@ -27,8 +47,63 @@ interface MoodleCourseDao {
 
 @Dao
 interface AssignmentDao {
-    @Upsert
-    suspend fun upsertAll(assignments: List<AssignmentEntity>)
+    /**
+     * フェッチ結果を反映する。新規課題は追加し、既存課題はフェッチ由来の列のみ更新する。
+     * ignored / detectedAt / firstSeenAt はユーザー・履歴由来のため保持する。
+     */
+    @Transaction
+    suspend fun upsertAll(assignments: List<AssignmentEntity>) {
+        if (assignments.isEmpty()) return
+        insertFetched(assignments)
+        assignments.forEach { updateFetched(it) }
+    }
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertFetched(assignments: List<AssignmentEntity>)
+
+    /** フェッチ由来の列のみ更新する（ignored / detectedAt / firstSeenAt は変更しない）。 */
+    @Query(
+        """
+        UPDATE assignments SET
+            courseId = :courseId,
+            courseName = :courseName,
+            title = :title,
+            url = :url,
+            deadline = :deadline,
+            deadlineText = :deadlineText,
+            submissionStatus = :submissionStatus,
+            lifecycleStatus = :lifecycleStatus,
+            lastCheckedAt = :lastCheckedAt
+        WHERE id = :id
+        """,
+    )
+    suspend fun updateFetched(
+        id: String,
+        courseId: String,
+        courseName: String,
+        title: String,
+        url: String,
+        deadline: Long?,
+        deadlineText: String,
+        submissionStatus: SubmissionStatus,
+        lifecycleStatus: LifecycleStatus,
+        lastCheckedAt: Long,
+    )
+
+    suspend fun updateFetched(assignment: AssignmentEntity) {
+        updateFetched(
+            id = assignment.id,
+            courseId = assignment.courseId,
+            courseName = assignment.courseName,
+            title = assignment.title,
+            url = assignment.url,
+            deadline = assignment.deadline,
+            deadlineText = assignment.deadlineText,
+            submissionStatus = assignment.submissionStatus,
+            lifecycleStatus = assignment.lifecycleStatus,
+            lastCheckedAt = assignment.lastCheckedAt,
+        )
+    }
 
     @Query("SELECT * FROM assignments WHERE id = :id")
     suspend fun getById(id: String): AssignmentEntity?
@@ -51,7 +126,7 @@ interface AssignmentDao {
     fun observeIgnored(): Flow<List<AssignmentEntity>>
 
     /**
-     * ホーム・ウィジェット用: 未提出かつ期限切れでない課題を期日昇順で。
+     * ホーム・ウィジェット用: 未提出課題（期限切れも含む）を期日昇順で。
      * 非表示コースの課題は除外する。
      */
     @Query(
@@ -59,7 +134,7 @@ interface AssignmentDao {
         SELECT * FROM assignments
         WHERE ignored = 0
           AND courseId NOT IN (SELECT id FROM moodle_courses WHERE enabled = 0)
-          AND lifecycleStatus IN ('ACTIVE', 'BEFORE_START')
+          AND lifecycleStatus != 'SUBMITTED'
           AND submissionStatus NOT IN ('SUBMITTED', 'COMPLETED')
         ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC
         """,
@@ -71,7 +146,7 @@ interface AssignmentDao {
         SELECT * FROM assignments
         WHERE ignored = 0
           AND courseId NOT IN (SELECT id FROM moodle_courses WHERE enabled = 0)
-          AND lifecycleStatus IN ('ACTIVE', 'BEFORE_START')
+          AND lifecycleStatus != 'SUBMITTED'
           AND submissionStatus NOT IN ('SUBMITTED', 'COMPLETED')
         ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC
         """,
@@ -90,7 +165,16 @@ interface NotifiedKeyDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entity: NotifiedKeyEntity)
 
-    @Query("DELETE FROM notified_keys WHERE createdAt < :threshold")
+    /**
+     * 通知の重複防止キーを先取りする。戻り値 -1 は既に登録済み（＝通知抑止）。
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun claim(entity: NotifiedKeyEntity): Long
+
+    @Query("DELETE FROM notified_keys WHERE `key` = :key")
+    suspend fun deleteByKey(key: String)
+
+    @Query("DELETE FROM notified_keys WHERE createdAt < :threshold AND `key` NOT LIKE 'attendance-risk:%'")
     suspend fun purgeOlderThan(threshold: Long)
 }
 
@@ -153,6 +237,9 @@ interface TimetableDao {
 
 @Dao
 interface ClassSessionDao {
+    @Query("SELECT * FROM class_sessions")
+    fun observeAll(): Flow<List<ClassSessionEntity>>
+
     @Query("DELETE FROM class_sessions")
     suspend fun clear()
 
@@ -171,6 +258,9 @@ interface ClassSessionDao {
 
 @Dao
 interface LocalAttendanceDao {
+    @Query("SELECT * FROM local_attendance")
+    fun observeAll(): Flow<List<LocalAttendanceEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: LocalAttendanceEntity)
 
@@ -186,6 +276,9 @@ interface LocalAttendanceDao {
 
 @Dao
 interface AttendanceOverrideDao {
+    @Query("SELECT * FROM attendance_overrides")
+    fun observeAll(): Flow<List<AttendanceOverrideEntity>>
+
     @Upsert
     suspend fun upsert(entity: AttendanceOverrideEntity)
 

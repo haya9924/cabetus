@@ -17,16 +17,26 @@ android {
         targetSdk = 35
         versionCode = 2
         versionName = "1.2"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "org.cabetus.AttendanceIntegrationInstrumentation"
     }
 
     buildTypes {
+        debug {
+            // リリース版(org.cabetus)と別アプリとして共存させる。
+            // applicationIdSuffix によりプロセス・データ領域・Provider authority が分離される。
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        create("beta") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
         }
     }
     compileOptions {
@@ -45,6 +55,15 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/DEPENDENCIES"
             excludes += "/META-INF/INDEX.LIST"
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("beta")) { variant ->
+        variant.outputs.forEach { output ->
+            output.versionCode.set(5)
+            output.versionName.set("1.3-beta.3")
         }
     }
 }
@@ -86,7 +105,6 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
 
-    implementation(libs.pdfbox.android)
 
     testImplementation(libs.junit)
     testImplementation(libs.pdfbox)

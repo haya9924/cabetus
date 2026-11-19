@@ -41,8 +41,10 @@ class Converters {
         LocalAttendanceEntity::class,
         AttendanceOverrideEntity::class,
         NotificationHistoryEntity::class,
+        ClassWebAttendanceEntity::class,
+        MobileAttendanceConfirmationEntity::class,
     ],
-    version = 3,
+    version = 5,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -57,7 +59,30 @@ abstract class TusDatabase : RoomDatabase() {
     abstract fun attendanceOverrideDao(): AttendanceOverrideDao
     abstract fun notificationHistoryDao(): NotificationHistoryDao
 
+    abstract fun classWebAttendanceDao(): ClassWebAttendanceDao
+    abstract fun mobileAttendanceConfirmationDao(): MobileAttendanceConfirmationDao
+
     companion object {
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `mobile_attendance_confirmations` (
+                    `courseCode` TEXT NOT NULL, `date` INTEGER NOT NULL, `period` INTEGER NOT NULL,
+                    `confirmedAt` INTEGER NOT NULL, `inferred` INTEGER NOT NULL, `inferenceBasis` TEXT,
+                    PRIMARY KEY(`courseCode`, `date`, `period`)
+                )""".trimIndent())
+            }
+        }
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE IF NOT EXISTS `class_web_attendance` (
+                    `academicYear` INTEGER NOT NULL, `term` TEXT NOT NULL,
+                    `courseCode` TEXT NOT NULL, `date` INTEGER NOT NULL,
+                    `period` INTEGER NOT NULL, `sessionNo` INTEGER,
+                    `rawMark` TEXT NOT NULL, `fetchedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`academicYear`, `term`, `courseCode`, `date`, `period`)
+                )""".trimIndent())
+            }
+        }
         /**
          * v1→v2: 手動修正用テーブル attendance_overrides を追加するだけ。
          * 既存データには一切触れないため安全（列は Room の期待スキーマと完全一致させる）。
