@@ -36,7 +36,6 @@ android {
         }
         create("beta") {
             initWith(getByName("release"))
-            applicationIdSuffix = ".beta"
             matchingFallbacks += listOf("release")
         }
     }
@@ -63,8 +62,8 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("beta")) { variant ->
         variant.outputs.forEach { output ->
-            output.versionCode.set(4)
-            output.versionName.set("1.3-beta.2")
+            output.versionCode.set(5)
+            output.versionName.set("1.3-beta.3")
         }
     }
 }
