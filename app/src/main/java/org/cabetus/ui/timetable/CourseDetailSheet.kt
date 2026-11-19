@@ -10,9 +10,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.EditCalendar
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,7 +24,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -53,14 +57,21 @@ fun CourseDetailSheet(
     detail: CourseDetail?,
     onOpenSyllabus: (String) -> Unit,
     onOpenLetus: (String) -> Unit,
+    onOpenClass: () -> Unit,
     loadRows: suspend (String) -> List<AttendanceRowUi>,
     setStatus: suspend (String, Long, Int, AttendanceStatus?) -> Unit,
     onChanged: () -> Unit,
-    confirmationRevision: List<org.cabetus.data.local.MobileAttendanceConfirmationEntity> = emptyList(),
+    confirmationRevision: List<org.cabetus.data.local.MobileAttendanceConfirmationEntity>,
+    goalSettings: @Composable () -> Unit,
 ) {
+    var showSettings by remember { mutableStateOf(false) }
+    var showAttendanceDialog by remember { mutableStateOf(false) }
+    val overviewScroll = rememberScrollState()
+    val settingsScroll = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(if (showSettings) settingsScroll else overviewScroll)
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -70,60 +81,65 @@ fun CourseDetailSheet(
             return@Column
         }
 
-        var showAttendanceDialog by remember { mutableStateOf(false) }
+        if (!showSettings) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    detail.name,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                IconButton(onClick = { showSettings = true }) {
+                    Icon(Icons.Filled.Settings, contentDescription = "授業の設定")
+                }
+            }
+            val attendance = buildString {
+                append("${detail.presentCount} / ${detail.heldCount} 回")
+                detail.effectiveRatePercent?.let { append("（$it%）") }
+            }
+            InfoRow("出席", attendance)
+            TextButton(onClick = { showAttendanceDialog = true }) {
+                Icon(Icons.Filled.EditCalendar, contentDescription = null)
+                Text("  出席の詳細・修正")
+            }
+            HorizontalDivider()
+            InfoRow("休講", "科目別には未確認")
+            InfoRow("教室移動", "科目別には未確認")
+            TextButton(onClick = onOpenClass) { Text("CLASSで掲示を確認") }
 
-        Text(
-            detail.name,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-        )
+            if (showAttendanceDialog) {
+                AttendanceDetailDialog(
+                    detail = detail,
+                    loadRows = loadRows,
+                    setStatus = setStatus,
+                    onChanged = onChanged,
+                    onDismiss = { showAttendanceDialog = false },
+                    confirmationRevision = confirmationRevision,
+                )
+            }
+            return@Column
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { showSettings = false }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "授業詳細に戻る")
+            }
+            Text("授業の設定", style = MaterialTheme.typography.titleLarge)
+        }
+        Text(detail.name, style = MaterialTheme.typography.titleMedium)
         if (detail.instructor.isNotBlank()) {
             InfoRow("教員", detail.instructor)
         }
-        InfoRow("教室", if (detail.isOnline) "オンライン（遠隔）" else (detail.room ?: "—"))
+        InfoRow("通常の教室", if (detail.isOnline) "オンライン（遠隔）" else (detail.room ?: "—"))
         detail.credits?.let { InfoRow("単位", "${it}単位") }
         InfoRow("科目コード", detail.code)
 
         HorizontalDivider()
-
-        // 出席状況
-        Text("出席状況", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-        detail.effectiveRatePercent?.let { rate ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LinearProgressIndicator(
-                    progress = { (rate / 100f).coerceIn(0f, 1f) },
-                    modifier = Modifier.weight(1f),
-                )
-                Text("$rate%", fontWeight = FontWeight.Bold)
-            }
-        }
-        InfoRow("出席数", "${detail.presentCount} 回（実施 ${detail.heldCount} 回）")
-        if (detail.hasAdjustments) {
-            Text(
-                "※ 手動修正が反映されています",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-        }
-        detail.officialRatePercent?.let {
-            Text(
-                "CLASS の記録上の出席率: $it%",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        OutlinedButton(
-            onClick = { showAttendanceDialog = true },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Icon(Icons.Filled.EditCalendar, contentDescription = null)
-            Text("  詳細・修正")
-        }
+        Text("出席目標", style = MaterialTheme.typography.titleMedium)
+        goalSettings()
 
         detail.letusCourseUrl?.let { url ->
             OutlinedButton(onClick = { onOpenLetus(url) }, modifier = Modifier.fillMaxWidth()) {
@@ -146,31 +162,19 @@ fun CourseDetailSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-
-        if (showAttendanceDialog) {
-            AttendanceDetailDialog(
-                code = detail.code,
-                courseName = detail.name,
-                loadRows = loadRows,
-                setStatus = setStatus,
-                onChanged = onChanged,
-                onDismiss = { showAttendanceDialog = false },
-                confirmationRevision = confirmationRevision,
-            )
-        }
     }
 }
 
 @Composable
 private fun AttendanceDetailDialog(
-    code: String,
-    courseName: String,
+    detail: CourseDetail,
     loadRows: suspend (String) -> List<AttendanceRowUi>,
     setStatus: suspend (String, Long, Int, AttendanceStatus?) -> Unit,
     onChanged: () -> Unit,
     onDismiss: () -> Unit,
     confirmationRevision: List<org.cabetus.data.local.MobileAttendanceConfirmationEntity>,
 ) {
+    val code = detail.code
     val scope = rememberCoroutineScope()
     var rows by remember { mutableStateOf<List<AttendanceRowUi>?>(null) }
     var reloadTrigger by remember { mutableIntStateOf(0) }
@@ -197,6 +201,12 @@ private fun AttendanceDetailDialog(
                     val label = java.time.format.DateTimeFormatter.ofPattern("M/d HH:mm:ss")
                         .withZone(ZoneId.of("Asia/Tokyo")).format(Instant.ofEpochMilli(time))
                     Text("アプリ内記録の読込：$label", style = MaterialTheme.typography.labelSmall)
+                }
+                if (detail.hasAdjustments) {
+                    Text("手動修正が反映されています", style = MaterialTheme.typography.labelSmall)
+                }
+                detail.officialRatePercent?.let {
+                    Text("CLASS の記録上の出席率: $it%", style = MaterialTheme.typography.labelSmall)
                 }
                 Text("CLASSからの取得ではありません（プレビューのみ）", style = MaterialTheme.typography.labelSmall)
                 loadError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error) }
