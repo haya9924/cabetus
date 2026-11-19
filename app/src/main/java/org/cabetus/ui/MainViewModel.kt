@@ -36,8 +36,8 @@ class MainViewModel @Inject constructor(
             session.takeIf { current?.setupCompleted == true && cells.isEmpty() }
         }.distinctUntilChanged().collectLatest { session ->
             if (session == null || session == attemptedBrowserSession) return@collectLatest
-            // Returning from the CLASS browser gives an expired session another chance after login.
-            if (attemptedBrowserSession != null && !classBrowser.timetableStatus.value.authRequired) return@collectLatest
+            // Also retry after returning from the browser: the user may have opened it
+            // to sign in before the initial attempt could report an authentication error.
             while (!classBrowser.tryStartInitialTimetable()) delay(500)
             attemptedBrowserSession = session
         }

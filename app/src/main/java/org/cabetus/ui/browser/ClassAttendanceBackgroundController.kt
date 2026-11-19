@@ -155,19 +155,19 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
      *
      * 出欠巡回・モバイル出席確認・変更通知と同じブラウザ枠を同期的に予約し、
      * 既存モードと同時に実行しない。年度・学期は推定も変更もしない。
+     * false はブラウザ枠が使用中の場合だけ。開始エラーは状態で通知する。
      */
     fun tryStartInitialTimetable(): Boolean {
         if (isBrowserBusy || foregroundRequested) return false
         timetableMutable.value = timetableMutable.value.copy(
             running = true, failed = false, authRequired = false, message = "時間割を確認中",
         )
-        return try {
+        try {
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, ClassAttendanceTourService::class.java)
                     .setAction(ClassAttendanceTourService.TIMETABLE),
             )
-            true
         } catch (_: RuntimeException) {
             timetableMutable.value = timetableMutable.value.copy(
                 running = false,
@@ -175,8 +175,8 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
                 completedAt = System.currentTimeMillis(),
                 message = "時間割を取り込めません。アプリを表示して再試行してください。",
             )
-            false
         }
+        return true
     }
     internal fun publishTimetable(value: TimetableStatus) { timetableMutable.value = value }
 }
