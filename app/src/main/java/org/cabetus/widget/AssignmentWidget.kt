@@ -2,7 +2,6 @@ package org.cabetus.widget
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.datastore.preferences.core.Preferences
@@ -33,6 +32,7 @@ import androidx.glance.unit.ColorProvider
 import org.cabetus.data.local.AssignmentEntity
 import org.cabetus.notification.NotificationHelper
 import org.cabetus.ui.MainActivity
+import org.cabetus.ui.browser.BrowserIntents
 import dagger.hilt.android.EntryPointAccessors
 import java.time.Instant
 import java.time.ZoneId
@@ -138,8 +138,14 @@ class AssignmentWidget : GlanceAppWidget() {
                                 .padding(vertical = 3.dp)
                                 .clickable(
                                     actionStartActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(a.url))
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                        BrowserIntents.createOpenIntent(context, a.url)
+                                            ?: Intent(context, MainActivity::class.java).apply {
+                                                putExtra(
+                                                    MainActivity.EXTRA_NAVIGATE,
+                                                    MainActivity.NAV_ASSIGNMENTS,
+                                                )
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            },
                                     ),
                                 ),
                         ) {

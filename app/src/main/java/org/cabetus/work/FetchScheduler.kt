@@ -58,6 +58,15 @@ class FetchScheduler @Inject constructor(
         wm.enqueueUniqueWork(ONESHOT_NAME, androidx.work.ExistingWorkPolicy.REPLACE, request)
     }
 
+    /** ブラウザ閲覧後の自動更新。手動要求を置換せず、通信制限も迂回しない。 */
+    fun fetchAfterBrowsing() {
+        val request = OneTimeWorkRequestBuilder<FetchWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInputData(workDataOf(FetchWorker.KEY_FORCE to false))
+            .build()
+        wm.enqueueUniqueWork(ONESHOT_NAME, androidx.work.ExistingWorkPolicy.KEEP, request)
+    }
+
     fun cancelPeriodic() {
         wm.cancelUniqueWork(PERIODIC_NAME)
     }

@@ -29,7 +29,7 @@ jobs:
             -Dorg.gradle.java.home="$JAVA_HOME" \
             '-Dorg.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=512m' \
             -Pkotlin.compiler.execution.strategy=in-process \
-            :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest
+            :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleBeta
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -37,4 +37,10 @@ jobs:
           path: |
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/androidTest/debug/*.apk
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cabetus-beta-unsigned
+          path: app/build/outputs/apk/beta/*-unsigned.apk
+          if-no-files-found: error
           retention-days: 7

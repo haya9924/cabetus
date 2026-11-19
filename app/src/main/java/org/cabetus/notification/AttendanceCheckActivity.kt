@@ -1,12 +1,11 @@
 package org.cabetus.notification
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.core.app.NotificationManagerCompat
 import org.cabetus.data.local.LocalAttendanceEntity
 import org.cabetus.data.local.LocalAttendanceDao
+import org.cabetus.ui.browser.BrowserIntents
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,12 +47,8 @@ class AttendanceCheckActivity : ComponentActivity() {
             }
         }
 
-        runCatching {
-            startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(CLASS_URL))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
+        // CLASS はアプリ内ブラウザで開く（Cookie はブラウザ側と分離され、SSO は WebView 内で完結）。
+        BrowserIntents.open(this, CLASS_URL)
         finish()
     }
 

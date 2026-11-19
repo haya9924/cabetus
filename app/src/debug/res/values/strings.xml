@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- debug ビルド専用。リリース版とランチャー上で区別するためのラベルのみ上書きする。 -->
+<resources>
+    <string name="app_name">cabetus (debug)</string>
+</resources>

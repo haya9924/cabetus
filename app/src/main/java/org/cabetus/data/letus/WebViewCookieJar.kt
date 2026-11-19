@@ -12,7 +12,9 @@ import okhttp3.HttpUrl
  */
 class WebViewCookieJar : CookieJar {
 
-    private val cookieManager: CookieManager = CookieManager.getInstance()
+    // Do not initialize WebView during dependency injection/OkHttp construction.
+    // Cookie access happens only when executing an actual network request.
+    private val cookieManager: CookieManager get() = CookieManager.getInstance()
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         val urlString = url.toString()
