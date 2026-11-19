@@ -187,6 +187,16 @@ private fun ClassCard(state: HomeUiState) {
                     "🟢 実施中: ${current.period}限 ${current.name}" +
                         (if (current.isOnline) "（オンライン）" else current.room?.let { "（$it）" } ?: ""),
                 )
+                current.letusCourseUrl?.let { url ->
+                    val context = LocalContext.current
+                    TextButton(onClick = {
+                        try {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, url.toUri()))
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            android.widget.Toast.makeText(context, "LETUSを開けるブラウザがありません。", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }) { Text("この授業のLETUS") }
+                }
             }
             if (next != null) {
                 Text(

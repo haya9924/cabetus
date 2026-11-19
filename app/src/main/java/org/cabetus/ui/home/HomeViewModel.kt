@@ -8,6 +8,12 @@ import org.cabetus.data.ai.AssistantResult
 import org.cabetus.data.local.AssignmentDao
 import org.cabetus.data.local.AssignmentEntity
 import org.cabetus.data.local.ClassCourseDao
+import org.cabetus.data.local.MoodleCourseDao
+import org.cabetus.domain.LetusClassLinkResolver
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
+import java.time.LocalDateTime
+import java.time.ZoneId
 import org.cabetus.data.local.NotificationHistoryDao
 import org.cabetus.data.local.TimetableDao
 import org.cabetus.data.settings.SettingsRepository
@@ -38,6 +44,7 @@ data class TodayClass(
     val start: LocalTime?,
     val end: LocalTime?,
     val isCurrent: Boolean,
+    val letusCourseUrl: String? = null,
 )
 
 data class HomeUiState(
@@ -55,6 +62,7 @@ class HomeViewModel @Inject constructor(
     private val assignmentDao: AssignmentDao,
     private val timetableDao: TimetableDao,
     private val classCourseDao: ClassCourseDao,
+    private val moodleCourseDao: MoodleCourseDao,
     private val weatherRepository: WeatherRepository,
     private val assistantRepository: AssistantRepository,
     private val notificationHelper: NotificationHelper,
@@ -63,34 +71,48 @@ class HomeViewModel @Inject constructor(
 
     private val dateFmt = DateTimeFormatter.ofPattern("M月d日（E）", Locale.JAPANESE)
 
+    private val classLinkInputs = combine(moodleCourseDao.observeAll(), flow {
+        val jst = ZoneId.of("Asia/Tokyo")
+        while (true) {
+            emit(LocalDateTime.now(jst))
+            delay(5_000)
+        }
+    }) { courses, time -> courses.map { LetusClassLinkResolver.Course(it.name, it.url) } to time }
+
     val uiState: StateFlow<HomeUiState> = combine(
         settingsRepository.settings,
         assignmentDao.observePending(),
         timetableDao.observeAll(),
         classCourseDao.observeAll(),
-    ) { settings, pending, cells, courses ->
-        val today = LocalDate.now()
+        classLinkInputs,
+    ) { settings, pending, cells, courses, (letusCourses, clock) ->
+        val today = clock.toLocalDate()
         val dow = today.dayOfWeek.value // 1=Mon..7=Sun
         val nameByCode = courses.associate { it.code to it.name }
-        val now = LocalTime.now()
+        val now = clock.toLocalTime()
 
         val todayClasses = cells.filter { it.dayOfWeek == dow }
             .sortedBy { it.period }
             .map { c ->
                 val pt = PeriodTimes.of(c.period)
-                val isCurrent = pt != null && now >= pt.start && now <= pt.end
+                val isCurrent = pt != null && now >= pt.start && now < pt.end
+                val name = nameByCode[c.courseCode]?.takeIf { it.isNotBlank() }
+                    ?: c.courseName.ifBlank { c.courseCode }
                 TodayClass(
                     period = c.period,
-                    name = nameByCode[c.courseCode]?.takeIf { it.isNotBlank() }
-                        ?: c.courseName.ifBlank { c.courseCode },
+                    name = name,
                     room = c.room,
                     isOnline = c.isOnline,
                     start = pt?.start,
                     end = pt?.end,
                     isCurrent = isCurrent,
+                    letusCourseUrl = if (isCurrent) LetusClassLinkResolver.resolve(c.courseCode, name, letusCourses) else null,
                 )
             }
-        val current = todayClasses.firstOrNull { it.isCurrent }
+        val ongoing = todayClasses.filter { it.isCurrent }
+        val current = ongoing.firstOrNull()?.let {
+            if (ongoing.size == 1) it else it.copy(letusCourseUrl = null)
+        }
         val next = todayClasses.firstOrNull { it.start != null && it.start > now }
 
         HomeUiState(
