@@ -100,7 +100,14 @@ fun CourseDetailSheet(
                 append("${detail.presentCount} / ${detail.heldCount} 回")
                 detail.effectiveRatePercent?.let { append("（$it%）") }
             }
-            InfoRow("出席", attendance)
+            InfoRow("出席（アプリ集計）", attendance)
+            if (detail.hasAdjustments) {
+                Text(
+                    "手動修正を反映済み",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             TextButton(onClick = { showAttendanceDialog = true }) {
                 Icon(Icons.Filled.EditCalendar, contentDescription = null)
                 Text("  出席の詳細・修正")
