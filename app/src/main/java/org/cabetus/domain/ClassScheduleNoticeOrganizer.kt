@@ -440,7 +440,7 @@ object ClassScheduleNoticeOrganizer {
     /** 先頭の括弧が閉じていない、途中で切れたタイトルは手がかりがあっても採用しない。 */
     private fun isMalformedTitle(text: String): Boolean {
         val first = text.firstOrNull() ?: return true
-        if (first in CLOSING_DELIMITERS) return true
+        if (first in CLOSING_DELIMITERS || text.endsWith("...")) return true
         val close = BRACKETS[first] ?: return false
         return text.indexOf(close) < 0
     }

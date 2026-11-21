@@ -14,7 +14,7 @@ class ClassScheduleNoticeOrganizerTest {
 
     @Test
     fun exactCourseNamesAndKindsAreNormalizedWithoutChangingTheDisplayedTitles() {
-        val titles = listOf("休講：数学　Ａ", "【実施場所変更】物理", "休講取消：数学 A", "教室移動：数学 A")
+        val titles = listOf("休講：数学　Ａ", "【実施場所変更】物理学", "休講取消：数学 A", "教室移動：数学 A")
         val result = organize(titles, listOf(math, physics, math))
         assertEquals(
             listOf(Notice(titles[0], Kind.CANCELLATION), Notice(titles[2], Kind.OTHER), Notice(titles[3], Kind.ROOM_CHANGE)),
