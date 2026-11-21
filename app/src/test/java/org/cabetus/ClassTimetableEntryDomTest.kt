@@ -37,7 +37,7 @@ class ClassTimetableEntryDomTest {
         assertTrue(script.contains("url.username || url.password || url.hash"))
         assertTrue(script.contains("raw.charAt(0) === '#'"))
         assertTrue(script.contains("timetablePaths.indexOf(url.pathname) >= 0"))
-        assertTrue(script.contains("link.getAttribute('href') === '#'"))
+        assertTrue(script.contains("if (link.getAttribute('href') !== '#') return false;"))
         assertTrue(script.contains("['学生時間割表', '学生時間割', '時間割表']"))
         // 任意の href を辿ったり、パスを推測したりしない。
         assertFalse(script.contains("location.assign"))
