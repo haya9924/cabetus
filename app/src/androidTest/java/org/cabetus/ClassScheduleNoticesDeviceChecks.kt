@@ -54,7 +54,7 @@ internal object ClassScheduleNoticesDeviceChecks {
                     }
                 }
                 view.measure(MeasureSpec.makeMeasureSpec(480, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(800, MeasureSpec.EXACTLY))
-                view.layout(0, 480, 800)
+                view.layout(0, 0, 480, 800)
                 // The HTTP(S) base URL supplies document.origin/path; HTML is local and network loads are blocked.
                 view.loadDataWithBaseURL(BOARD, html, "text/html", "UTF-8", BOARD)
             }
