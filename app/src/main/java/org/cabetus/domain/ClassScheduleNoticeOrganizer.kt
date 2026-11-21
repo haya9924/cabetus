@@ -53,7 +53,7 @@ object ClassScheduleNoticeOrganizer {
 
     // A field is closed only by its own paired brackets, another explicitly labelled field,
     // or the end of the title. A slash/comma alone may be separating multiple course names.
-    private val FIELD_LABEL = Regex("(?<![^\\s\\[【「(,:;|])(科目名|科目コード)\\s*:")
+    private val FIELD_LABEL = Regex("(?<![^\\s\\[【「(,:;|、])(科目名|科目コード)\\s*:")
     private val FIELD_SEPARATOR = Regex("[\\s,;|、]+$")
     private val BRACKETS = mapOf('[' to ']', '【' to '】', '「' to '」', '(' to ')')
     private val CLOSING_DELIMITERS = setOf(']', '】', '」', '』', ')', '}')
