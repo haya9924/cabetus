@@ -1,20 +1,30 @@
 package org.cabetus.ui.gp
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,10 +34,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,9 +53,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.cabetus.domain.GpCalculator
 import org.cabetus.domain.GpCalculator.Grade
@@ -405,6 +421,7 @@ fun GpCalculatorScreen(
     var modeName by rememberSaveable { mutableStateOf(GpMode.PREDICT.name) }
     var targetGp by rememberSaveable { mutableStateOf(DEFAULT_TARGET_GP) }
     var targetId by rememberSaveable { mutableStateOf(-1L) }
+    var editingId by rememberSaveable { mutableStateOf(-1L) }
 
     val mode = GpMode.entries.firstOrNull { it.name == modeName } ?: GpMode.PREDICT
     val positiveTargets = rows.filter { row ->
@@ -468,80 +485,233 @@ fun GpCalculatorScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("GP電卓") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
-                    }
-                },
-            )
+            Column {
+                TopAppBar(
+                    title = { Text("GP電卓") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "戻る")
+                        }
+                    },
+                )
+                WeightSummaryBar(weightSum = outcome.weightSum)
+            }
         },
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .imePadding(),
         ) {
             ModeSelector(
                 mode = mode,
                 onModeChange = { modeName = it.name },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
 
-            if (mode == GpMode.REQUIRE) {
-                RequirementSettingsCard(
-                    targetOptions = targetOptions,
-                    selectedId = effectiveTargetId,
-                    targetGp = targetGp,
-                    onSelectTarget = { targetId = it },
-                    onSelectGp = { targetGp = it },
-                )
-            }
-
-            ResultCard(
-                mode = mode,
-                prediction = prediction,
-                requirement = requirement,
-                targetGp = targetGp,
-                targetName = targetRow?.displayName() ?: "対象項目",
-                targetMax = targetMax,
-                weightSum = outcome.weightSum,
-            )
-
-            if (issues.isNotEmpty()) {
-                IssuesCard(issues)
-            }
-
-            InputCard(
-                rows = rows,
-                mode = mode,
-                targetId = effectiveTargetId,
-                onRowChange = { updated ->
-                    rows = rows.map { if (it.id == updated.id) updated else it }
-                },
-                onDeleteRow = { id ->
-                    rows = rows.filterNot { it.id == id }
-                    if (targetId == id) targetId = -1L
-                },
-                onAddRow = {
-                    val id = nextId
-                    nextId = nextId + 1L
-                    rows = rows + GpItemInput(
-                        id = id,
-                        name = "追加項目",
-                        weight = "",
-                        score = "",
-                        max = DEFAULT_MAX,
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 16.dp, end = 12.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(2f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ItemList(
+                        rows = rows,
+                        mode = mode,
+                        targetId = effectiveTargetId,
+                        onEdit = { editingId = it },
+                        onAdd = {
+                            val id = nextId
+                            nextId = nextId + 1L
+                            rows = rows + GpItemInput(
+                                id = id,
+                                name = "追加項目",
+                                weight = "",
+                                score = "",
+                                max = DEFAULT_MAX,
+                            )
+                            editingId = id
+                        },
                     )
-                },
-                attendanceImport = attendanceImport,
-            )
 
-            NotesCard()
+                    if (mode == GpMode.REQUIRE) {
+                        RequirementSettingsCard(
+                            targetOptions = targetOptions,
+                            selectedId = effectiveTargetId,
+                            targetGp = targetGp,
+                            onSelectTarget = { targetId = it },
+                            onSelectGp = { targetGp = it },
+                        )
+                    }
+
+                    ResultCard(
+                        mode = mode,
+                        prediction = prediction,
+                        requirement = requirement,
+                        targetGp = targetGp,
+                        targetName = targetRow?.displayName() ?: "対象項目",
+                        targetMax = targetMax,
+                    )
+
+                    if (issues.isNotEmpty()) {
+                        IssuesCard(issues)
+                    }
+
+                    NotesCard()
+                }
+
+                Column(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        prediction?.let { "${formatDecimal(it.score)}点 · GP ${it.grade.gp}" } ?: "評価目盛り",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    GradeRail(
+                        prediction = prediction,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+
+    val editingRow = rows.firstOrNull { it.id == editingId }
+    if (editingRow != null) {
+        ItemEditorDialog(
+            item = editingRow,
+            isTarget = mode == GpMode.REQUIRE && editingRow.id == effectiveTargetId,
+            mode = mode,
+            onChange = { updated ->
+                rows = rows.map { if (it.id == updated.id) updated else it }
+            },
+            onDelete = if (editingRow.isAttendance) {
+                null
+            } else {
+                {
+                    rows = rows.filterNot { it.id == editingRow.id }
+                    if (targetId == editingRow.id) targetId = -1L
+                    editingId = -1L
+                }
+            },
+            onDismiss = { editingId = -1L },
+            attendanceImport = attendanceImport,
+        )
+    }
+}
+
+@Composable
+private fun WeightSummaryBar(weightSum: BigDecimal?) {
+    val complete = weightSum?.compareTo(HUNDRED) == 0
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (complete) {
+            MaterialTheme.colorScheme.surfaceVariant
+        } else {
+            MaterialTheme.colorScheme.errorContainer
+        },
+        contentColor = if (complete) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onErrorContainer
+        },
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("比重", style = MaterialTheme.typography.labelLarge)
+            Text(
+                if (weightSum == null) {
+                    "入力エラー / 100%"
+                } else {
+                    "${formatDecimal(weightSum)}% / 100%"
+                },
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+/** 0〜100 の得点をレール上の高さへ変換する。成績帯は等間隔、S の上は余白にする。 */
+private fun gradeRailFraction(score: BigDecimal?): Float? {
+    if (score == null) return null
+    val value = score.toFloat().coerceIn(0f, 100f)
+    val thresholds = Grade.entries.asReversed().map { it.minimum.toFloat() }
+    for (index in thresholds.indices.reversed()) {
+        val low = thresholds[index]
+        if (value >= low) {
+            val high = if (index == thresholds.lastIndex) 100f else thresholds[index + 1]
+            val within = if (high > low) ((value - low) / (high - low)).coerceIn(0f, 1f) else 1f
+            return (index + within) / thresholds.size
+        }
+    }
+    return 0f
+}
+
+@Composable
+private fun GradeRail(
+    prediction: GpCalculator.Prediction?,
+    modifier: Modifier = Modifier,
+) {
+    val fraction = gradeRailFraction(prediction?.score)
+    val description = if (prediction == null) {
+        "評価スケール。予想結果はまだありません。"
+    } else {
+        "評価スケール。予想評価 ${prediction.grade.name}、" +
+            "予想得点 ${prediction.score.toPlainString()}点。"
+    }
+    Row(
+        modifier = modifier
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BoxWithConstraints(Modifier.fillMaxHeight(), contentAlignment = Alignment.Center) {
+            val inset = maxHeight / 12f
+            Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.width(24.dp).fillMaxHeight().padding(vertical = inset)
+                        .clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    if (fraction != null && fraction > 0f) {
+                        Box(
+                            Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(fraction)
+                                .background(MaterialTheme.colorScheme.error),
+                        )
+                    }
+                }
+                Column(Modifier.fillMaxHeight().padding(start = 5.dp)) {
+                    // 目盛りは各行の中央。先頭の空行はSの上（100点）を確保する。
+                    Spacer(Modifier.weight(1f))
+                    Grade.entries.forEach { grade ->
+                        val current = prediction?.grade == grade
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            HorizontalDivider(Modifier.width(8.dp), color = MaterialTheme.colorScheme.outline)
+                            Text(
+                                grade.name,
+                                modifier = Modifier.padding(start = 5.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
+                                color = if (current) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -550,8 +720,9 @@ fun GpCalculatorScreen(
 private fun ModeSelector(
     mode: GpMode,
     onModeChange: (GpMode) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("計算方法", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
@@ -659,7 +830,6 @@ private fun ResultCard(
     targetGp: Int,
     targetName: String,
     targetMax: BigDecimal?,
-    weightSum: BigDecimal?,
 ) {
     val impossible = requirement == GpCalculator.Requirement.Impossible
     val grade = when {
@@ -670,12 +840,6 @@ private fun ResultCard(
         else -> null
     }
     val colors = resultColors(grade, impossible)
-    val weightComplete = weightSum?.compareTo(HUNDRED) == 0
-    val weightText = if (weightSum == null) {
-        "入力エラー"
-    } else {
-        "${formatDecimal(weightSum)}% / 100%"
-    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -801,26 +965,6 @@ private fun ResultCard(
                     )
                 }
             }
-
-            HorizontalDivider(color = colors.content.copy(alpha = 0.2f))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("比重の合計", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    weightText,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (weightComplete) colors.content else MaterialTheme.colorScheme.error,
-                )
-            }
-            if (weightSum != null && !weightComplete) {
-                Text(
-                    "空欄の比重は0%として扱います。合計を100%にしてください。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         }
     }
 }
@@ -847,52 +991,73 @@ private fun IssuesCard(issues: List<String>) {
 }
 
 @Composable
-private fun InputCard(
+private fun ItemList(
     rows: List<GpItemInput>,
     mode: GpMode,
     targetId: Long,
-    onRowChange: (GpItemInput) -> Unit,
-    onDeleteRow: (Long) -> Unit,
-    onAddRow: () -> Unit,
-    attendanceImport: @Composable (onApply: (present: Int, completed: Int) -> Unit) -> Unit,
+    onEdit: (Long) -> Unit,
+    onAdd: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("入力", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "比重の空欄は0%として扱い、その項目の得点や出席の入力は使いません。" +
-                    "比重の合計を100%にしてください。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            rows.forEach { row ->
-                key(row.id) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    ItemEditor(
-                        item = row,
-                        isTarget = mode == GpMode.REQUIRE && row.id == targetId,
-                        mode = mode,
-                        onChange = onRowChange,
-                        onDelete = if (row.isAttendance) null else ({ onDeleteRow(row.id) }),
-                        attendanceImport = attendanceImport,
-                    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        rows.forEach { item ->
+            key(item.id) {
+                val weight = parseWeight(item.weight)
+                val isTarget = mode == GpMode.REQUIRE && item.id == targetId
+                OutlinedCard(onClick = { onEdit(item.id) }, modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.size(10.dp).clip(RoundedCornerShape(3.dp))
+                                    .background(if (isTarget) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary),
+                            )
+                            Text(item.displayName(), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        Text(
+                            weight?.let { "${formatDecimal(it)}%" } ?: "比重エラー",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = if (weight == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        )
+                        val detail = when {
+                            isTarget -> "逆算の対象"
+                            item.isAttendance && item.total.isNotBlank() -> "出席 ${item.present} / ${item.total}回"
+                            !item.isAttendance && item.score.isNotBlank() -> "得点 ${item.score} / ${item.max}点"
+                            else -> "タップして入力"
+                        }
+                        Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            OutlinedButton(
-                onClick = onAddRow,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = null)
-                Text("項目を追加", modifier = Modifier.padding(start = 8.dp))
-            }
+        }
+        OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Text("項目を追加", modifier = Modifier.padding(start = 6.dp))
         }
     }
+}
+
+@Composable
+private fun ItemEditorDialog(
+    item: GpItemInput,
+    isTarget: Boolean,
+    mode: GpMode,
+    onChange: (GpItemInput) -> Unit,
+    onDelete: (() -> Unit)?,
+    onDismiss: () -> Unit,
+    attendanceImport: @Composable (onApply: (present: Int, completed: Int) -> Unit) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(item.displayName(), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
+                ItemEditor(item, isTarget, mode, onChange, onDelete, attendanceImport)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("完了") } },
+    )
 }
 
 @Composable
