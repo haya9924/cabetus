@@ -55,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -673,14 +674,22 @@ private fun GradeRail(
         "評価スケール。予想評価 ${prediction.grade.name}、" +
             "予想得点 ${prediction.score.toPlainString()}点。"
     }
-    Row(
+    BoxWithConstraints(
         modifier = modifier
             .semantics(mergeDescendants = true) { contentDescription = description }
             .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
+        contentAlignment = Alignment.Center,
     ) {
-        BoxWithConstraints(Modifier.fillMaxHeight(), contentAlignment = Alignment.Center) {
+        val minimumHeight = with(LocalDensity.current) {
+            MaterialTheme.typography.labelMedium.lineHeight.toDp() * 6
+        }
+        if (maxHeight < minimumHeight) {
+            Text(
+                prediction?.grade?.name ?: "S–D",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (prediction == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+            )
+        } else {
             val inset = maxHeight / 12f
             Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -1171,20 +1180,18 @@ private fun AttendanceFields(
         onChange = { onChange(item.copy(total = it)) },
         modifier = Modifier.fillMaxWidth(),
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CountField(
-            value = item.completed,
-            label = "終了済み回数",
-            onChange = { onChange(item.copy(completed = it)) },
-            modifier = Modifier.weight(1f),
-        )
-        CountField(
-            value = item.present,
-            label = "出席済み回数",
-            onChange = { onChange(item.copy(present = it)) },
-            modifier = Modifier.weight(1f),
-        )
-    }
+    CountField(
+        value = item.completed,
+        label = "終了済み回数",
+        onChange = { onChange(item.copy(completed = it)) },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    CountField(
+        value = item.present,
+        label = "出席済み回数",
+        onChange = { onChange(item.copy(present = it)) },
+        modifier = Modifier.fillMaxWidth(),
+    )
 
     if (hideTargetEstimate) {
         InfoLine(
