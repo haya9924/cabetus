@@ -93,6 +93,7 @@ fun TimetableScreen(
     val goals by viewModel.goalEvaluations.collectAsStateWithLifecycle()
     val lastFetch by viewModel.lastAttendanceFetch.collectAsStateWithLifecycle()
     val backgroundStatus by viewModel.backgroundStatus.collectAsStateWithLifecycle()
+    val timetableImport by viewModel.timetableImportStatus.collectAsStateWithLifecycle()
     val mappingModel: org.cabetus.ui.browser.ClassAttendanceTourViewModel = hiltViewModel()
     val mappingChoices by mappingModel.mappingChoices.collectAsStateWithLifecycle()
     val mappingMessage by mappingModel.mappingMessage.collectAsStateWithLifecycle()
@@ -103,6 +104,14 @@ fun TimetableScreen(
     val syncing = backgroundStatus.running
     var syncError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val timetableEmpty = state.grid.isEmpty()
+    val openClass: () -> Unit = {
+        scope.launch {
+            if (!viewModel.openClassBrowser { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) }) {
+                syncError = "CLASSを開けませんでした。更新が終わってから再試行してください。"
+            }
+        }
+    }
     var goalError by remember { mutableStateOf<String?>(null) }
     var detail by remember { mutableStateOf<CourseDetail?>(null) }
     var selectedCode by remember { mutableStateOf<String?>(null) }
@@ -133,6 +142,13 @@ fun TimetableScreen(
             title = {
                 Column {
                     Text("時間割")
+                    if (timetableEmpty) {
+                        val message = when {
+                            timetableImport.running -> "CLASSから時間割を取り込み中…"
+                            else -> null
+                        }
+                        message?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                    }
                     if (backgroundStatus.message.isNotBlank()) {
                         Text(backgroundStatus.message, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
                     }
@@ -144,22 +160,31 @@ fun TimetableScreen(
             },
             actions = {
                 if (!syncing && mappingChoices.isNotEmpty()) TextButton(onClick = { showMappings = true }) { Text("科目対応") }
-                IconButton(onClick = {
-                    if (syncing) viewModel.cancelAttendanceSync() else scope.launch {
-                        syncError = null
-                        try { viewModel.startAttendanceSync() }
-                        catch (_: IllegalArgumentException) { syncError = "設定で年度を保存してください" }
-                        catch (e: IllegalStateException) { syncError = e.message }
-                    }
-                }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = if (syncing) "出欠更新を中止" else "出欠の更新")
-                }
-                if (backgroundStatus.authRequired && !syncing) {
-                    TextButton(onClick = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) }) { Text("ログイン") }
-                }
+                val refreshTimetable = timetableEmpty && !syncing
                 IconButton(
-                    onClick = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) },
+                    enabled = !timetableImport.running,
+                    onClick = {
+                        syncError = null
+                        if (refreshTimetable) {
+                            if (!viewModel.retryTimetableImport()) syncError = "CLASSの確認が終わってから再試行してください"
+                        } else if (syncing) viewModel.cancelAttendanceSync() else scope.launch {
+                            try { viewModel.startAttendanceSync() }
+                            catch (_: IllegalArgumentException) { syncError = "設定で年度を保存してください" }
+                            catch (e: IllegalStateException) { syncError = e.message }
+                        }
+                    },
                 ) {
+                    val label = when {
+                        refreshTimetable -> "時間割を取得"
+                        syncing -> "出欠更新を中止"
+                        else -> "出欠の更新"
+                    }
+                    Icon(Icons.Filled.Refresh, contentDescription = label)
+                }
+                if (!syncing && backgroundStatus.authRequired) {
+                    TextButton(onClick = openClass) { Text("ログイン") }
+                }
+                IconButton(onClick = openClass) {
                     Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "CLASSを開く")
                 }
             },
@@ -195,6 +220,25 @@ fun TimetableScreen(
                         highlight = highlight,
                         onSelect = { code -> selectedCode = code },
                     )
+                }
+            }
+            if (timetableEmpty && timetableImport.failed && !timetableImport.running) {
+                val message = if (timetableImport.authRequired) {
+                    "CLASSにログインしてから学生時間割表を開いてください。"
+                } else {
+                    timetableImport.message.ifBlank { "時間割を取り込めませんでした。" }
+                }
+                androidx.compose.material3.Card(Modifier.align(Alignment.Center).padding(24.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(message, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = openClass) {
+                            Text(if (timetableImport.authRequired) "CLASSにログイン" else "CLASSで時間割を開く")
+                        }
+                        Text(
+                            "CLASSの「学生時間割表」を開き、取り込みプレビューから保存できます。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
             }
         }

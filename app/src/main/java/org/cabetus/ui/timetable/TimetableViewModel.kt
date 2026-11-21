@@ -93,6 +93,12 @@ class TimetableViewModel @Inject constructor(
 
     val syncWork = syncScheduler.work.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val backgroundStatus = backgroundTour.status
+    val timetableImportStatus = backgroundTour.timetableStatus
+
+    fun retryTimetableImport(): Boolean = backgroundTour.tryStartInitialTimetable()
+
+    suspend fun openClassBrowser(launch: () -> Boolean): Boolean = backgroundTour.openForeground(launch)
+
     suspend fun startAttendanceSync() {
         require(settingsRepository.current().academicYear in 2000..2100)
         backgroundTour.start()
