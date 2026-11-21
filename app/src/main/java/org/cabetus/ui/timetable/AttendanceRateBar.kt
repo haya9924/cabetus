@@ -1,6 +1,7 @@
 package org.cabetus.ui.timetable
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -61,7 +63,7 @@ fun AttendanceRateBar(
     val goalLabel = attendanceGoalLabel(goal)
     val goalFraction = attendanceGoalFraction(goal)
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
-    val fillColor = MaterialTheme.colorScheme.primary
+    val fillColor = if (isSystemInDarkTheme()) Color(0xFF69C982) else Color(0xFF258046)
     val goalColor = MaterialTheme.colorScheme.error
 
     val description = buildString {

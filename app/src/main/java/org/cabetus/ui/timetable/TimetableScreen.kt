@@ -222,10 +222,21 @@ fun TimetableScreen(
             var detailReload by remember { mutableIntStateOf(0) }
             var goalError by remember { mutableStateOf<String?>(null) }
             val scheduleStatus by viewModel.scheduleStatus.collectAsStateWithLifecycle()
+            val mappings by viewModel.scheduleCourseMappings.collectAsStateWithLifecycle()
             val snapshot = scheduleStatus.snapshot
-            val notices = remember(snapshot, state.grid) {
+            val notices = remember(snapshot, state.grid, state.academicYear, mappings) {
+                val year = state.academicYear
+                val aliases = if (year > 0) mappings.entries
+                    .filter { it.key.startsWith("$year:") }
+                    .groupBy({ it.value }, { it.key.removePrefix("$year:") }) else emptyMap()
                 val courses = state.grid.values.flatten().map {
-                    ClassScheduleNoticeOrganizer.Course(it.courseCode, it.name)
+                    ClassScheduleNoticeOrganizer.Course(
+                        code = it.courseCode,
+                        name = it.name,
+                        officialCodeAlias = if (it.courseCode.startsWith("CLASSWEB-")) {
+                            aliases[it.courseCode]?.singleOrNull()
+                        } else null,
+                    )
                 }
                 ClassScheduleNoticeOrganizer.organize(snapshot?.titles.orEmpty(), courses)
             }

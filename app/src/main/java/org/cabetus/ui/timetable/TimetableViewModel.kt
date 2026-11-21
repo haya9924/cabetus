@@ -96,6 +96,8 @@ class TimetableViewModel @Inject constructor(
     val syncWork = syncScheduler.work.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val backgroundStatus = backgroundTour.status
     val scheduleStatus = backgroundTour.scheduleStatus
+    val scheduleCourseMappings = settingsRepository.classAttendanceMappings
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     suspend fun autoRefreshScheduleNotices() {
         // Also retry when a busy browser or attendance tour releases the shared slot.

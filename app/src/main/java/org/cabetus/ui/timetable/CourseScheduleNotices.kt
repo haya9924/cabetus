@@ -53,7 +53,12 @@ internal fun CourseScheduleNotices(
             }
             if (snapshot != null) {
                 if (notices.isEmpty()) {
-                    Text("取得した掲示に、この科目と特定できるものはありません。", style = MaterialTheme.typography.bodySmall)
+                    val emptyMessage = when {
+                        snapshot.titles.isEmpty() -> "取得した一覧に時間割変更の掲示はありません。"
+                        unmatched.isNotEmpty() -> "この科目に振り分けられた掲示はありません。科目未特定の掲示も確認できます。"
+                        else -> "取得した範囲に、この科目の掲示はありません。"
+                    }
+                    Text(emptyMessage, style = MaterialTheme.typography.bodySmall)
                 } else {
                     for (kind in Kind.entries) {
                         val group = notices.filter { it.kind == kind }
