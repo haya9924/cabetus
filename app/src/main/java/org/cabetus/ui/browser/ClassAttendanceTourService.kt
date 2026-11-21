@@ -50,6 +50,7 @@ class ClassAttendanceTourService : Service() {
     private var timetableOutcome: ClassAttendanceBackgroundController.TimetableStatus? = null
     /** 同一 document で入口リンクを二度押さないための世代。 */
     private var timetableEntryGeneration = -1L
+    private var timetableStage = "時間割の取得を開始できませんでした"
     private var diagnosticLogging = false
     @Inject lateinit var mobileRepository: MobileAttendanceRepository
     @Inject lateinit var networkMonitor: org.cabetus.data.network.NetworkMonitor
@@ -85,6 +86,7 @@ class ClassAttendanceTourService : Service() {
         scheduleSnapshot = null
         timetableOutcome = null
         timetableEntryGeneration = -1L
+        timetableStage = "時間割の取得を開始できませんでした"
         job = scope.launch(start = CoroutineStart.LAZY) {
             var reason: String? = null
             try {
@@ -93,12 +95,12 @@ class ClassAttendanceTourService : Service() {
                 withTimeout(deadline) { executeTour() }
             } catch (_: TimeoutCancellationException) {
                 auth = awaitingAuth
-                reason = "自動接続が完了しませんでした。保存済み記録は保持しています。"
+                reason = if (timetable) timetableStage else "自動接続が完了しませんでした。保存済み記録は保持しています。"
             }
               catch (_: CancellationException) { reason = failure ?: "更新を中止しました。保存済み記録は保持しています。" }
               catch (e: Exception) {
                   if (mobile && diagnosticLogging) android.util.Log.d("ClassMobileRead", "failed type=${e.javaClass.simpleName} stage=${if (view == null) "host" else "read"}")
-                  reason = failure ?: "CLASSの画面を確認できませんでした。保存済み記録は保持しています。"
+                  reason = failure ?: (if (timetable) timetableStage else "CLASSの画面を確認できませんでした。保存済み記録は保持しています。")
               }
             finally {
                 if (timetable) {
@@ -208,10 +210,17 @@ class ClassAttendanceTourService : Service() {
                 return
             }
         }
+        if (timetable) timetableStage = "読み取り用ブラウザを起動できませんでした"
         host = ClassAttendanceVirtualDisplayHost(this)
         val browser = host!!.create(); view = browser; alive = true
         // Responsive CLASS layouts require a normal phone-width CSS viewport.
         browser.settings.textZoom = 100
+        if (timetable) {
+            // Use the same viewport settings as the browser that displays the manual preview.
+            browser.settings.useWideViewPort = true
+            browser.settings.loadWithOverviewMode = true
+            timetableStage = "CLASSの入口を開けませんでした"
+        }
         browser.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
             override fun onGeolocationPermissionsShowPrompt(origin: String?, callback: GeolocationPermissions.Callback) { callback.invoke(origin, false, false) }
@@ -230,6 +239,7 @@ class ClassAttendanceTourService : Service() {
                 if (ClassAttendanceEntryPolicy.classify(url) == ClassAttendanceEntryPolicy.Page.BLOCKED) fail("許可されていない画面への移動を停止しました。")
             }
             override fun onPageFinished(v: WebView, url: String?) {
+                if (timetable && (v !== view || v.url != url)) return
                 loading = false
                 if (ClassAttendanceEntryPolicy.classify(v.url) == ClassAttendanceEntryPolicy.Page.CLASS) ClassMenuPanelFix.applyIfNeeded(v, url)
                 SecureWebViewConfig.flushCookies()
@@ -315,32 +325,20 @@ class ClassAttendanceTourService : Service() {
         val doc = generation
         fun isCurrent() = alive && !loading && view === browser && generation == doc && browser.url == url
         if (!isCurrent()) return false
-        if (BrowserUrlPolicy.isClassTimetablePage(url) &&
-            ClassTimetableDomExtractor.parseVerificationResult(evaluate(ClassTimetableDomExtractor.VERIFY_SCRIPT)) == null
-        ) {
-            if (!isCurrent()) return false
-            awaitingAuth = false
-            val parsed = ClassTimetableDomExtractor.parseEvaluationResult(evaluate(ClassTimetableDomExtractor.SCRIPT))
-            if (!isCurrent() || parsed.error != null || parsed.slots.isEmpty()) return false
-            currentCoroutineContext().ensureActive()
-            val result = timetableRepository.save(parsed.slots.map {
-                ClassTimetableSlot(it.dayOfWeek, it.period, it.courseName, it.courseCode, it.room)
-            })
-            if (result.insertedCells == 0 && !result.blocked) return false
-            timetableOutcome = ClassAttendanceBackgroundController.TimetableStatus(
-                insertedCells = result.insertedCells,
-                createdCourses = result.createdCourses,
-                completedAt = System.currentTimeMillis(),
-                message = if (result.blocked) "既存の時間割は変更していません。"
-                    else "時間割を${result.insertedCells}コマ取り込みました。",
+        val timetablePage = BrowserUrlPolicy.isClassTimetablePage(url)
+        if (timetablePage) {
+            val verificationError = ClassTimetableDomExtractor.parseVerificationResult(
+                evaluate(ClassTimetableDomExtractor.VERIFY_SCRIPT),
             )
-            if (result.insertedCells > 0) {
-                alarmScheduler.rescheduleClassAlarms()
-                widgetUpdater.updateAll()
+            if (!isCurrent()) return false
+            timetableStage = verificationError?.userMessage ?: "時間割表の科目を読み取れませんでした"
+            if (verificationError == null) {
+                awaitingAuth = false
+                return saveInitialTimetable(::isCurrent)
             }
-            return true
+        } else if (url != BrowserUrlPolicy.CLASS_URL) {
+            timetableStage = "CLASSの学生時間割表への移動を確認できませんでした"
         }
-        if (!isCurrent()) return false
         if (timetableEntryGeneration != doc && evaluate(ClassTimetableEntryDom.SCRIPT) == "true") {
             timetableEntryGeneration = doc
             return false
@@ -350,6 +348,36 @@ class ClassAttendanceTourService : Service() {
             if (isCurrent()) awaitingAuth = login == "true"
         }
         return false
+    }
+
+    private suspend fun saveInitialTimetable(isCurrent: () -> Boolean): Boolean {
+        val parsed = ClassTimetableDomExtractor.parseEvaluationResult(evaluate(ClassTimetableDomExtractor.SCRIPT))
+        if (!isCurrent()) return false
+        if (parsed.error != null || parsed.slots.isEmpty()) {
+            timetableStage = parsed.error?.userMessage ?: "時間割表に取り込める科目が見つかりませんでした"
+            return false
+        }
+        currentCoroutineContext().ensureActive()
+        timetableStage = "読み取った時間割を端末に保存できませんでした"
+        val result = timetableRepository.save(parsed.slots.map {
+            ClassTimetableSlot(it.dayOfWeek, it.period, it.courseName, it.courseCode, it.room)
+        })
+        if (result.insertedCells == 0 && !result.blocked) {
+            timetableStage = "取り込めるコマがありませんでした。CLASSで時間割表を確認してください。"
+            error("No accepted timetable cells")
+        }
+        timetableOutcome = ClassAttendanceBackgroundController.TimetableStatus(
+            insertedCells = result.insertedCells,
+            createdCourses = result.createdCourses,
+            completedAt = System.currentTimeMillis(),
+            message = if (result.blocked) "既存の時間割は変更していません。"
+                else "時間割を${result.insertedCells}コマ取り込みました。",
+        )
+        if (result.insertedCells > 0) {
+            alarmScheduler.rescheduleClassAlarms()
+            widgetUpdater.updateAll()
+        }
+        return true
     }
 
     private suspend fun captureMobile(): Boolean {

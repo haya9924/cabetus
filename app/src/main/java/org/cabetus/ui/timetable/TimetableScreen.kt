@@ -145,8 +145,6 @@ fun TimetableScreen(
                     if (timetableEmpty) {
                         val message = when {
                             timetableImport.running -> "CLASSから時間割を取り込み中…"
-                            timetableImport.authRequired -> "時間割の取得にはCLASSへのログインが必要です"
-                            timetableImport.failed -> "時間割を取り込めませんでした"
                             else -> null
                         }
                         message?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
@@ -183,7 +181,7 @@ fun TimetableScreen(
                     }
                     Icon(Icons.Filled.Refresh, contentDescription = label)
                 }
-                if (!syncing && (backgroundStatus.authRequired || (timetableEmpty && timetableImport.authRequired))) {
+                if (!syncing && backgroundStatus.authRequired) {
                     TextButton(onClick = openClass) { Text("ログイン") }
                 }
                 IconButton(onClick = openClass) {
@@ -222,6 +220,25 @@ fun TimetableScreen(
                         highlight = highlight,
                         onSelect = { code -> selectedCode = code },
                     )
+                }
+            }
+            if (timetableEmpty && timetableImport.failed && !timetableImport.running) {
+                val message = if (timetableImport.authRequired) {
+                    "CLASSにログインしてから学生時間割表を開いてください。"
+                } else {
+                    timetableImport.message.ifBlank { "時間割を取り込めませんでした。" }
+                }
+                androidx.compose.material3.Card(Modifier.align(Alignment.Center).padding(24.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(message, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = openClass) {
+                            Text(if (timetableImport.authRequired) "CLASSにログイン" else "CLASSで時間割を開く")
+                        }
+                        Text(
+                            "CLASSの「学生時間割表」を開き、取り込みプレビューから保存できます。",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
             }
         }
