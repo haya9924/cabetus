@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import org.cabetus.domain.AttendanceGoal
 import org.cabetus.domain.AttendanceSource
 import org.cabetus.domain.AttendanceStatus
 import java.time.Instant
@@ -57,11 +58,13 @@ fun CourseDetailSheet(
     detail: CourseDetail?,
     onOpenSyllabus: (String) -> Unit,
     onOpenLetus: (String) -> Unit,
-    onOpenClass: () -> Unit,
     loadRows: suspend (String) -> List<AttendanceRowUi>,
     setStatus: suspend (String, Long, Int, AttendanceStatus?) -> Unit,
     onChanged: () -> Unit,
     confirmationRevision: List<org.cabetus.data.local.MobileAttendanceConfirmationEntity>,
+    attendanceRatePercent: Int?,
+    attendanceGoal: AttendanceGoal?,
+    scheduleNotices: @Composable () -> Unit,
     goalSettings: @Composable () -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
@@ -96,6 +99,37 @@ fun CourseDetailSheet(
                     Icon(Icons.Filled.Settings, contentDescription = "授業の設定")
                 }
             }
+            AttendanceRateBar(
+                ratePercent = attendanceRatePercent,
+                goal = attendanceGoal,
+            )
+            val letusUrl = detail.letusCourseUrl
+            if (letusUrl != null) {
+                OutlinedButton(onClick = { onOpenLetus(letusUrl) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("この授業のLETUSコースを開く")
+                }
+            } else {
+                OutlinedButton(onClick = {}, modifier = Modifier.fillMaxWidth(), enabled = false) {
+                    Text("LETUSコース未特定")
+                }
+            }
+            scheduleNotices()
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { showSettings = false }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "授業詳細に戻る")
+                }
+                Text("授業の設定", style = MaterialTheme.typography.titleLarge)
+            }
+            Text(detail.name, style = MaterialTheme.typography.titleMedium)
+            if (detail.instructor.isNotBlank()) {
+                InfoRow("教員", detail.instructor)
+            }
+            InfoRow("通常の教室", if (detail.isOnline) "オンライン（遠隔）" else (detail.room ?: "—"))
+            detail.credits?.let { InfoRow("単位", "${it}単位") }
+            InfoRow("科目コード", detail.code)
+
+            HorizontalDivider()
             val attendance = buildString {
                 append("${detail.presentCount} / ${detail.heldCount} 回")
                 detail.effectiveRatePercent?.let { append("（$it%）") }
@@ -112,61 +146,37 @@ fun CourseDetailSheet(
                 Icon(Icons.Filled.EditCalendar, contentDescription = null)
                 Text("  出席の詳細・修正")
             }
-            HorizontalDivider()
-            InfoRow("休講", "科目別には未確認")
-            InfoRow("教室移動", "科目別には未確認")
-            TextButton(onClick = onOpenClass) { Text("CLASSで掲示を確認") }
 
-            if (showAttendanceDialog) {
-                AttendanceDetailDialog(
-                    detail = detail,
-                    loadRows = loadRows,
-                    setStatus = setStatus,
-                    onChanged = onChanged,
-                    onDismiss = { showAttendanceDialog = false },
-                    confirmationRevision = confirmationRevision,
+            HorizontalDivider()
+            Text("出席目標", style = MaterialTheme.typography.titleMedium)
+            goalSettings()
+
+            HorizontalDivider()
+            Button(
+                onClick = { onOpenSyllabus(detail.code) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = detail.academicYear > 0,
+            ) {
+                Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null)
+                Text("  シラバスを開く")
+            }
+            if (detail.academicYear <= 0) {
+                Text(
+                    "シラバスを開くには設定画面で年度を設定してください。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            return@Column
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { showSettings = false }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "授業詳細に戻る")
-            }
-            Text("授業の設定", style = MaterialTheme.typography.titleLarge)
-        }
-        Text(detail.name, style = MaterialTheme.typography.titleMedium)
-        if (detail.instructor.isNotBlank()) {
-            InfoRow("教員", detail.instructor)
-        }
-        InfoRow("通常の教室", if (detail.isOnline) "オンライン（遠隔）" else (detail.room ?: "—"))
-        detail.credits?.let { InfoRow("単位", "${it}単位") }
-        InfoRow("科目コード", detail.code)
-
-        HorizontalDivider()
-        Text("出席目標", style = MaterialTheme.typography.titleMedium)
-        goalSettings()
-
-        detail.letusCourseUrl?.let { url ->
-            OutlinedButton(onClick = { onOpenLetus(url) }, modifier = Modifier.fillMaxWidth()) {
-                Text("この授業のLETUSコースを開く")
-            }
-        }
-
-        Button(
-            onClick = { onOpenSyllabus(detail.code) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = detail.academicYear > 0,
-        ) {
-            Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null)
-            Text("  シラバスを開く")
-        }
-        if (detail.academicYear <= 0) {
-            Text(
-                "シラバスを開くには設定画面で年度を設定してください。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        if (showAttendanceDialog) {
+            AttendanceDetailDialog(
+                detail = detail,
+                loadRows = loadRows,
+                setStatus = setStatus,
+                onChanged = onChanged,
+                onDismiss = { showAttendanceDialog = false },
+                confirmationRevision = confirmationRevision,
             )
         }
     }

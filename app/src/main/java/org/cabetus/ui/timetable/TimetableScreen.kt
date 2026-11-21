@@ -1,5 +1,6 @@
 package org.cabetus.ui.timetable
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,13 +54,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import org.cabetus.domain.AttendanceGoalCalculator
 import org.cabetus.domain.AttendanceGoalMonitor
+import org.cabetus.domain.ClassScheduleNoticeOrganizer
 import org.cabetus.domain.goalLabel
 import org.cabetus.domain.HighlightSlot
 import org.cabetus.domain.NextClassResolver
@@ -105,7 +110,15 @@ fun TimetableScreen(
     val syncing = backgroundStatus.running
     var syncError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     var selectedCode by remember { mutableStateOf<String?>(null) }
+    fun openBrowser(url: String) {
+        scope.launch {
+            if (!viewModel.openForegroundBrowser { BrowserIntents.open(context, url) }) {
+                Toast.makeText(context, "ブラウザを開けませんでした。少し待って再試行してください。", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // 30秒ごとに現在時刻を更新し、時限境界をまたいでもハイライトが追従する
     val jst = remember { java.time.ZoneId.of("Asia/Tokyo") }
@@ -148,10 +161,10 @@ fun TimetableScreen(
                     Icon(Icons.Filled.Refresh, contentDescription = if (syncing) "出欠更新を中止" else "出欠の更新")
                 }
                 if (backgroundStatus.authRequired && !syncing) {
-                    TextButton(onClick = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) }) { Text("ログイン") }
+                    TextButton(onClick = { openBrowser(BrowserUrlPolicy.CLASS_URL) }) { Text("ログイン") }
                 }
                 IconButton(
-                    onClick = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) },
+                    onClick = { openBrowser(BrowserUrlPolicy.CLASS_URL) },
                 ) {
                     Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "CLASSを開く")
                 }
@@ -208,6 +221,22 @@ fun TimetableScreen(
             var detail by remember { mutableStateOf<CourseDetail?>(null) }
             var detailReload by remember { mutableIntStateOf(0) }
             var goalError by remember { mutableStateOf<String?>(null) }
+            val scheduleStatus by viewModel.scheduleStatus.collectAsStateWithLifecycle()
+            val snapshot = scheduleStatus.snapshot
+            val notices = remember(snapshot, state.grid) {
+                val courses = state.grid.values.flatten().map {
+                    ClassScheduleNoticeOrganizer.Course(it.courseCode, it.name)
+                }
+                ClassScheduleNoticeOrganizer.organize(snapshot?.titles.orEmpty(), courses)
+            }
+            val evaluation = goals[code]?.takeIf { it.academicYear == state.academicYear }
+            val rate = state.grid.values.asSequence().flatten().firstOrNull { it.courseCode == code }
+                ?.effectiveRatePercent
+            LaunchedEffect(lifecycleOwner, viewModel) {
+                lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    viewModel.autoRefreshScheduleNotices()
+                }
+            }
             LaunchedEffect(detailReload, mobileConfirmations) {
                 detail = viewModel.loadDetail(code)
             }
@@ -219,14 +248,27 @@ fun TimetableScreen(
                 CourseDetailSheet(
                     detail = detail,
                     onOpenSyllabus = { selectedCode = null; onOpenSyllabus(it) },
-                    onOpenLetus = { BrowserIntents.open(context, it) },
-                    onOpenClass = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) },
+                    onOpenLetus = ::openBrowser,
+                    attendanceRatePercent = if (state.academicYear > 0) rate else detail?.effectiveRatePercent,
+                    attendanceGoal = evaluation?.goal,
+                    scheduleNotices = {
+                        CourseScheduleNotices(
+                            status = scheduleStatus,
+                            notices = notices.byCourse[code].orEmpty(),
+                            unmatched = notices.unmatched,
+                            onRefresh = {
+                                if (!viewModel.refreshScheduleNotices()) {
+                                    Toast.makeText(context, "すぐに更新できません。少し待って再試行してください。", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onOpenClass = { openBrowser(BrowserUrlPolicy.CLASS_URL) },
+                        )
+                    },
                     loadRows = viewModel::loadAttendanceRows,
                     setStatus = viewModel::setAttendanceStatus,
                     onChanged = { detailReload++ },
                     confirmationRevision = mobileConfirmations,
                     goalSettings = {
-                        val evaluation = goals[code]
                         if (state.academicYear > 0) {
                             AttendanceGoalEditor(
                                 totalClasses = evaluation?.goal?.totalClasses,
