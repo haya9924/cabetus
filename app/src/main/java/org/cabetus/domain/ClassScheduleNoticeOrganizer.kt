@@ -91,7 +91,7 @@ object ClassScheduleNoticeOrganizer {
 
     /** `...の教室変更について`, `...の休講` のような、科目名の後ろに続く掲示の文法。 */
     private val KIND_TRAILING_TOKEN =
-        Regex("^の?(?:$KIND_LABEL_PATTERN)(?:について|のお知らせ|の連絡|についてのお知らせ|等)?")
+        Regex("^の?(?:$KIND_LABEL_PATTERN)(?:についてのお知らせ|について|のお知らせ|の連絡|等)?")
     private val COMMON_TRAILING_TOKEN =
         Regex("^(?:差し替え|差替|補講実施|補講|振替|変更|中止|実施|延期)")
     private val DECORATION_TOKEN = Regex(
