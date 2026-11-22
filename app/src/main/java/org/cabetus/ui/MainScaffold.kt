@@ -1,5 +1,6 @@
 package org.cabetus.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
@@ -10,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavDestination.Companion.hierarchy
@@ -18,6 +20,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.launch
 import org.cabetus.ui.assignments.AssignmentsScreen
 import org.cabetus.ui.browser.BrowserIntents
 import org.cabetus.ui.browser.BrowserUrlPolicy
@@ -36,11 +39,13 @@ import org.cabetus.ui.timetable.TimetableScreen
 
 @Composable
 fun MainScaffold(
+    openForegroundBrowser: suspend (() -> Boolean) -> Boolean,
     pendingRoute: String? = null,
     onPendingConsumed: () -> Unit = {},
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     fun openTab(route: String) {
         navController.navigate(route) {
@@ -111,7 +116,13 @@ fun MainScaffold(
             composable(TopTab.MORE.route) {
                 MoreScreen(
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                    onOpenClass = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) },
+                    onOpenClass = {
+                        scope.launch {
+                            if (!openForegroundBrowser { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) }) {
+                                Toast.makeText(context, "ブラウザを開けませんでした。少し待って再試行してください。", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
                     onOpenGpCalculator = { navController.navigate(Routes.GP_CALCULATOR) },
                 )
             }

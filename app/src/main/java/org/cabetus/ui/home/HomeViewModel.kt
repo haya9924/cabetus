@@ -12,10 +12,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -341,6 +343,8 @@ class HomeViewModel @Inject constructor(
         }
         // ホーム表示中だけ、実施中コマの出席確認を自動で読み取る。
         // 非表示時は timeline / networkStatus を購読しない（1秒タイマーを動かさない）。
+        // 時間割が未登録の間は、変更通知の自動読取でブラウザ枠を先取りしない
+        // （初回の時間割取り込みを優先する）。時間割が登録されれば従来どおり動作する。
         viewModelScope.launch {
             // 直近に起動を要求したときのブラウザセッション。
             // 要再ログイン後、CLASS ブラウザを開いて閉じるとセッションが進み、抑制が解ける。
@@ -351,15 +355,23 @@ class HomeViewModel @Inject constructor(
             homeVisible
                 .flatMapLatest { visible ->
                     if (visible) {
-                        combine(timeline, networkStatus) { classTimeline, network ->
-                            classTimeline to network
+                        combine(
+                            timeline,
+                            networkStatus,
+                            timetableDao.observeAll()
+                                .map { it.isNotEmpty() }
+                                .distinctUntilChanged(),
+                        ) { classTimeline, network, hasTimetable ->
+                            Triple(classTimeline, network, hasTimetable)
                         }
                     } else {
-                        emptyFlow<Pair<ClassTimeline, NetworkStatus>>()
+                        emptyFlow<Triple<ClassTimeline, NetworkStatus, Boolean>>()
                     }
                 }
-                .collect { (classTimeline, network) ->
+                .collect { (classTimeline, network, hasTimetable) ->
                     if (!homeVisible.value) return@collect
+                    // 時間割が未登録の間は通知・モバイル出席の自動読取を開始しない。
+                    if (!hasTimetable) return@collect
                     val current = classTimeline.current
                     if (!network.isKnown || !network.isConnected) return@collect
                     if (backgroundController.isBrowserBusy) return@collect

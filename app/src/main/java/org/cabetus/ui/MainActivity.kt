@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
                         MainScaffold(
                             pendingRoute = route,
                             onPendingConsumed = { pendingNavRoute = null },
+                            openForegroundBrowser = viewModel::openForegroundBrowser,
                         )
                     }
                 }

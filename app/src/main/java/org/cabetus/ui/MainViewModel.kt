@@ -30,6 +30,8 @@ class MainViewModel @Inject constructor(
 
     private var attemptedBrowserSession: Long? = null
 
+    suspend fun openForegroundBrowser(launch: () -> Boolean): Boolean = classBrowser.openForeground(launch)
+
     /** Called only while MainActivity is resumed, including just after onboarding. */
     suspend fun bootstrapTimetableWhileResumed() {
         combine(settings, timetableDao.observeAll(), classBrowser.browserSession) { current, cells, session ->
