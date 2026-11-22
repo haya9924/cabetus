@@ -81,8 +81,7 @@ private val HUNDRED: BigDecimal = BigDecimal.valueOf(100)
 private const val DEFAULT_TARGET_GP = 2
 private const val DEFAULT_MAX = "100"
 private val RAIL_WIDTH = 68.dp
-private val RAIL_MIN_CONTENT_WIDTH = 320.dp
-private val RAIL_MIN_HEIGHT = 240.dp
+private val COMPACT_RAIL_WIDTH = 52.dp
 private val TARGET_GPS = listOf(4, 3, 2, 1)
 private const val NUMERIC_INPUT_LIMIT = 16
 private val DECIMAL_INPUT = Regex("-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)")
@@ -565,13 +564,11 @@ fun GpCalculatorScreen(
                     .fillMaxSize()
                     .padding(start = 16.dp, end = 12.dp, bottom = 8.dp),
             ) {
-                val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
-                // 本文に最低限の幅と高さを残せるときだけ、右側の評価レールを出す。
-                val showRail = maxWidth >= RAIL_MIN_CONTENT_WIDTH + RAIL_WIDTH + 12.dp &&
-                    maxHeight >= RAIL_MIN_HEIGHT * fontScale
+                // 評価レールは右に残し、狭い画面では幅と間隔だけを詰める。
+                val compactRail = maxWidth < 400.dp
                 Row(
                     modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (compactRail) 8.dp else 12.dp),
                 ) {
                     Column(
                         modifier = Modifier
@@ -624,21 +621,24 @@ fun GpCalculatorScreen(
                         NotesCard()
                     }
 
-                    if (showRail) {
-                        Column(
-                            modifier = Modifier.width(RAIL_WIDTH).fillMaxHeight(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
+                    Column(
+                        modifier = Modifier.width(if (compactRail) COMPACT_RAIL_WIDTH else RAIL_WIDTH).fillMaxHeight(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        if (maxHeight >= 160.dp) {
                             Text(
-                                prediction?.let { "${formatDecimal(it.score)}点 · GP ${it.grade.gp}" } ?: "評価目盛り",
+                                if (compactRail) "評価" else "評価目盛り",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            GradeRail(
-                                prediction = prediction,
-                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
+                        GradeRail(
+                            prediction = prediction,
+                            compact = compactRail,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                        )
                     }
                 }
             }
@@ -749,6 +749,7 @@ private fun gradeRailFraction(score: BigDecimal?): Float? {
 @Composable
 private fun GradeRail(
     prediction: GpCalculator.Prediction?,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val fraction = gradeRailFraction(prediction?.score)
@@ -767,37 +768,33 @@ private fun GradeRail(
         val minimumHeight = with(LocalDensity.current) {
             MaterialTheme.typography.labelMedium.lineHeight.toDp() * 6
         }
-        if (maxHeight < minimumHeight) {
-            Text(
-                prediction?.grade?.name ?: "S–D",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (prediction == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-            )
-        } else {
-            val inset = maxHeight / 12f
-            Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.width(24.dp).fillMaxHeight().padding(vertical = inset)
-                        .clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
-                ) {
-                    if (fraction != null && fraction > 0f) {
-                        Box(
-                            Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(fraction)
-                                .background(MaterialTheme.colorScheme.error),
-                        )
-                    }
+        val showLabels = maxHeight >= minimumHeight
+        val inset = maxHeight / 12f
+        Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.width(if (compact) 16.dp else 24.dp).fillMaxHeight().padding(vertical = inset)
+                    .clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                if (fraction != null && fraction > 0f) {
+                    Box(
+                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(fraction)
+                            .background(MaterialTheme.colorScheme.error),
+                    )
                 }
-                Column(Modifier.fillMaxHeight().padding(start = 5.dp)) {
-                    // 目盛りは各行の中央。先頭の空行はSの上（100点）を確保する。
-                    Spacer(Modifier.weight(1f))
-                    Grade.entries.forEach { grade ->
-                        val current = prediction?.grade == grade
-                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                            HorizontalDivider(Modifier.width(8.dp), color = MaterialTheme.colorScheme.outline)
+            }
+            Column(Modifier.fillMaxHeight().padding(start = 4.dp)) {
+                // 短い画面でも棒と目盛りを残し、ラベルだけ省く。
+                Spacer(Modifier.weight(1f))
+                Grade.entries.forEach { grade ->
+                    val current = prediction?.grade == grade
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        HorizontalDivider(Modifier.width(if (compact) 5.dp else 8.dp), color = MaterialTheme.colorScheme.outline)
+                        if (showLabels) {
                             Text(
                                 grade.name,
-                                modifier = Modifier.padding(start = 5.dp),
+                                modifier = Modifier.padding(start = 3.dp),
                                 style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
                                 fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
                                 color = if (current) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -910,7 +907,7 @@ private fun RequirementSettings(
                     }
                 }
 
-                if (maxWidth >= 276.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)) {
+                if (maxWidth >= 244.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         targetSelector(Modifier.weight(1f))
                         gpSelector(Modifier.weight(1f))
@@ -963,8 +960,8 @@ private fun SelectorField(
                 },
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp).heightIn(min = 48.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
