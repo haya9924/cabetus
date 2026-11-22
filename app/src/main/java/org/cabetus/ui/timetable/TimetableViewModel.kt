@@ -96,28 +96,40 @@ class TimetableViewModel @Inject constructor(
     val syncWork = syncScheduler.work.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val backgroundStatus = backgroundTour.status
     val scheduleStatus = backgroundTour.scheduleStatus
+    val timetableImportStatus = backgroundTour.timetableStatus
     val scheduleCourseMappings = settingsRepository.classAttendanceMappings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     suspend fun autoRefreshScheduleNotices() {
         // Also retry when a busy browser or attendance tour releases the shared slot.
         // The controller applies the same backoff as Home, so this cannot create a refresh loop.
-        combine(
+        val backgroundReady = combine(
             networkMonitor.status,
             backgroundTour.browserSession,
             backgroundTour.status,
             backgroundTour.mobileStatus,
-            backgroundTour.scheduleStatus,
-        ) { network, _, attendance, mobile, schedule ->
-            network.isKnown && network.isConnected && !attendance.running && !mobile.running && !schedule.running
-        }.collect { canRefresh ->
-            if (canRefresh) backgroundTour.tryStartScheduleNotices()
+            backgroundTour.timetableStatus,
+        ) { network, _, attendance, mobile, timetable ->
+            network.isKnown && network.isConnected && !attendance.running && !mobile.running &&
+                !timetable.running
         }
+        // 初回の時間割取り込みが終わるまでは、変更通知の自動読取でブラウザ枠を先取りしない。
+        combine(
+            backgroundReady,
+            backgroundTour.scheduleStatus,
+            timetableDao.observeAll(),
+        ) { ready, schedule, cells -> ready && !schedule.running && cells.isNotEmpty() }
+            .collect { canRefresh ->
+                if (canRefresh) backgroundTour.tryStartScheduleNotices()
+            }
     }
 
     fun refreshScheduleNotices(): Boolean = backgroundTour.tryStartScheduleNotices(manual = true)
 
     suspend fun openForegroundBrowser(launch: () -> Boolean): Boolean = backgroundTour.openForeground(launch)
+
+    fun retryTimetableImport(): Boolean = backgroundTour.tryStartInitialTimetable()
+
     suspend fun startAttendanceSync() {
         require(settingsRepository.current().academicYear in 2000..2100)
         backgroundTour.start()

@@ -13,7 +13,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import org.cabetus.data.settings.AppSettings
 import org.cabetus.ui.nav.Routes
 import org.cabetus.ui.nav.TopTab
@@ -31,6 +35,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleIntent(intent)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                viewModel.bootstrapTimetableWhileResumed()
+            }
+        }
         setContent {
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val current = settings ?: AppSettings()
