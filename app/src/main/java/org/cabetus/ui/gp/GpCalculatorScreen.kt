@@ -947,7 +947,7 @@ private fun SelectorField(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(MaterialTheme.shapes.small)
-                    .clickable(enabled = enabled, role = Role.Button, onClickLabel = "$labelを選ぶ") {
+                    .clickable(enabled = enabled, role = Role.Button, onClickLabel = "${label}を選ぶ") {
                         expanded = true
                     },
                 shape = MaterialTheme.shapes.small,
