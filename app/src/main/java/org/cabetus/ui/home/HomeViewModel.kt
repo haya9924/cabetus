@@ -156,22 +156,8 @@ class HomeViewModel @Inject constructor(
      */
     val mobileStatus = backgroundController.mobileStatus
     val scheduleStatus = backgroundController.scheduleStatus
-    private var scheduleAttemptElapsed: Long? = null
-    private var scheduleAttemptSession: Long? = null
-
-    /** 連続アクセスを避け、ブラウザを閉じた後は再ログインされた可能性があるので再試行する。 */
     private fun tryRefreshScheduleNotices() {
-        val session = backgroundController.browserSession.value
-        val now = SystemClock.elapsedRealtime()
-        val last = scheduleAttemptElapsed
-        if (scheduleAttemptSession == session &&
-            (scheduleStatus.value.authRequired || (last != null && now - last < 15 * 60_000L))
-        ) return
-        if (!backgroundController.isBrowserBusy) {
-            scheduleAttemptElapsed = now
-            scheduleAttemptSession = session
-            backgroundController.tryStartScheduleNotices()
-        }
+        backgroundController.tryStartScheduleNotices()
     }
 
     /** ホーム画面が表示中かどうか。自動更新・タイマーの購読を表示中だけに限定する。 */

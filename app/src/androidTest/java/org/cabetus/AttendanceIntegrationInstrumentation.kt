@@ -39,17 +39,25 @@ import java.time.ZoneOffset
  * [NetworkStatus] をパラメータとして渡す（端末状態は読まない）。
  */
 class AttendanceIntegrationInstrumentation : Instrumentation() {
+    private var suite: String? = null
 
     override fun newApplication(cl: ClassLoader, className: String, context: Context): Application =
         super.newApplication(cl, Application::class.java.name, context)
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
+        suite = arguments?.getString("suite")
         start()
     }
 
     override fun onStart() {
-        val outcome = runCatching { runBlocking { runChecks() } }
+        val outcome = runCatching {
+            when (suite) {
+                null -> runBlocking { runChecks() }
+                "schedule-notices" -> ClassScheduleNoticesDeviceChecks.run(this)
+                else -> error("Unknown instrumentation suite")
+            }
+        }
         outcome.fold(
             onSuccess = { evidence -> finish(Activity.RESULT_OK, evidence) },
             onFailure = { error -> finish(Activity.RESULT_CANCELED, stacktraceBundle(error)) },

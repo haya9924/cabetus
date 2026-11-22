@@ -1,5 +1,6 @@
 package org.cabetus.ui.timetable
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,6 +36,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -52,12 +54,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import org.cabetus.domain.AttendanceGoalCalculator
 import org.cabetus.domain.AttendanceGoalMonitor
+import org.cabetus.domain.ClassScheduleNoticeOrganizer
 import org.cabetus.domain.goalLabel
 import org.cabetus.domain.HighlightSlot
 import org.cabetus.domain.NextClassResolver
@@ -103,15 +110,14 @@ fun TimetableScreen(
     val syncing = backgroundStatus.running
     var syncError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    var goalError by remember { mutableStateOf<String?>(null) }
-    var detail by remember { mutableStateOf<CourseDetail?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
     var selectedCode by remember { mutableStateOf<String?>(null) }
-    var detailReload by remember { mutableIntStateOf(0) }
-    val sheetState = rememberModalBottomSheetState()
-
-    LaunchedEffect(selectedCode, detailReload, mobileConfirmations) {
-        val code = selectedCode
-        detail = if (code != null) viewModel.loadDetail(code) else null
+    fun openBrowser(url: String) {
+        scope.launch {
+            if (!viewModel.openForegroundBrowser { BrowserIntents.open(context, url) }) {
+                Toast.makeText(context, "ブラウザを開けませんでした。少し待って再試行してください。", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     // 30秒ごとに現在時刻を更新し、時限境界をまたいでもハイライトが追従する
@@ -155,10 +161,10 @@ fun TimetableScreen(
                     Icon(Icons.Filled.Refresh, contentDescription = if (syncing) "出欠更新を中止" else "出欠の更新")
                 }
                 if (backgroundStatus.authRequired && !syncing) {
-                    TextButton(onClick = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) }) { Text("ログイン") }
+                    TextButton(onClick = { openBrowser(BrowserUrlPolicy.CLASS_URL) }) { Text("ログイン") }
                 }
                 IconButton(
-                    onClick = { BrowserIntents.open(context, BrowserUrlPolicy.CLASS_URL) },
+                    onClick = { openBrowser(BrowserUrlPolicy.CLASS_URL) },
                 ) {
                     Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "CLASSを開く")
                 }
@@ -209,43 +215,104 @@ fun TimetableScreen(
         } }, confirmButton = { TextButton(onClick = { showMappings = false }) { Text("閉じる") } },
     )
 
-    if (selectedCode != null) {
-        ModalBottomSheet(
-            onDismissRequest = { selectedCode = null },
-            sheetState = sheetState,
-        ) {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-            val code = selectedCode!!
-            val evaluation = goals[code]
-            Column(Modifier.padding(horizontal = 24.dp)) {
-                if (state.academicYear > 0) {
-                    AttendanceGoalEditor(
-                        totalClasses = evaluation?.goal?.totalClasses,
-                        mode = evaluation?.goal?.mode?.name,
-                        value = evaluation?.goal?.value,
-                        resultLabel = evaluation?.result.goalLabel(),
-                        onSave = { total, mode, value -> scope.launch {
-                            try { viewModel.saveGoal(code, total, mode, value); goalError = null }
-                            catch (_: Exception) { goalError = "保存できませんでした。設定データをご確認ください。" }
-                        } },
-                        onRemove = { scope.launch {
-                            try { viewModel.removeGoal(code); goalError = null }
-                            catch (_: Exception) { goalError = "解除できませんでした。" }
-                        } },
+    selectedCode?.let { code ->
+        key(code) {
+            val sheetState = rememberModalBottomSheetState()
+            var detail by remember { mutableStateOf<CourseDetail?>(null) }
+            var detailReload by remember { mutableIntStateOf(0) }
+            var goalError by remember { mutableStateOf<String?>(null) }
+            val scheduleStatus by viewModel.scheduleStatus.collectAsStateWithLifecycle()
+            val mappings by viewModel.scheduleCourseMappings.collectAsStateWithLifecycle()
+            val snapshot = scheduleStatus.snapshot
+            val notices = remember(snapshot, state.grid, state.academicYear, mappings) {
+                val year = state.academicYear
+                val aliases = if (year > 0) mappings.entries
+                    .filter { it.key.startsWith("$year:") }
+                    .groupBy({ it.value }, { it.key.removePrefix("$year:") }) else emptyMap()
+                val courses = state.grid.values.flatten().map {
+                    ClassScheduleNoticeOrganizer.Course(
+                        code = it.courseCode,
+                        name = it.name,
+                        officialCodeAlias = if (it.courseCode.startsWith("CLASSWEB-")) {
+                            aliases[it.courseCode]?.singleOrNull()
+                        } else null,
                     )
-                } else Text("出席目標を設定するには、設定画面で年度を設定してください。")
-                goalError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+                ClassScheduleNoticeOrganizer.organize(snapshot?.titles.orEmpty(), courses)
             }
-            CourseDetailSheet(
-                detail = detail,
-                onOpenSyllabus = { code -> selectedCode = null; onOpenSyllabus(code) },
-                onOpenLetus = { url -> BrowserIntents.open(context, url) },
-                loadRows = viewModel::loadAttendanceRows,
-                setStatus = viewModel::setAttendanceStatus,
-                onChanged = { detailReload++ },
-                confirmationRevision = mobileConfirmations,
+            val evaluation = goals[code]?.takeIf { it.academicYear == state.academicYear }
+            val rate = state.grid.values.asSequence().flatten().firstOrNull { it.courseCode == code }
+                ?.effectiveRatePercent
+            LaunchedEffect(lifecycleOwner, viewModel) {
+                lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    viewModel.autoRefreshScheduleNotices()
+                }
+            }
+            LaunchedEffect(detailReload, mobileConfirmations) {
+                detail = viewModel.loadDetail(code)
+            }
 
-            )
+            ModalBottomSheet(
+                onDismissRequest = { selectedCode = null },
+                sheetState = sheetState,
+            ) {
+                CourseDetailSheet(
+                    detail = detail,
+                    onOpenSyllabus = { selectedCode = null; onOpenSyllabus(it) },
+                    onOpenLetus = ::openBrowser,
+                    attendanceRatePercent = if (state.academicYear > 0) rate else detail?.effectiveRatePercent,
+                    attendanceGoal = evaluation?.goal,
+                    scheduleNotices = {
+                        CourseScheduleNotices(
+                            status = scheduleStatus,
+                            notices = notices.byCourse[code].orEmpty(),
+                            unmatched = notices.unmatched,
+                            onRefresh = {
+                                if (!viewModel.refreshScheduleNotices()) {
+                                    Toast.makeText(context, "すぐに更新できません。少し待って再試行してください。", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onOpenClass = { openBrowser(BrowserUrlPolicy.CLASS_URL) },
+                        )
+                    },
+                    loadRows = viewModel::loadAttendanceRows,
+                    setStatus = viewModel::setAttendanceStatus,
+                    onChanged = { detailReload++ },
+                    confirmationRevision = mobileConfirmations,
+                    goalSettings = {
+                        if (state.academicYear > 0) {
+                            AttendanceGoalEditor(
+                                totalClasses = evaluation?.goal?.totalClasses,
+                                mode = evaluation?.goal?.mode?.name,
+                                value = evaluation?.goal?.value,
+                                resultLabel = evaluation?.result.goalLabel(),
+                                onSave = { total, mode, value -> scope.launch {
+                                    try {
+                                        viewModel.saveGoal(code, total, mode, value)
+                                        goalError = null
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        goalError = "保存できませんでした。設定データをご確認ください。"
+                                    }
+                                } },
+                                onRemove = { scope.launch {
+                                    try {
+                                        viewModel.removeGoal(code)
+                                        goalError = null
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        goalError = "解除できませんでした。"
+                                    }
+                                } },
+                            )
+                        } else {
+                            Text("出席目標を設定するには、設定画面で年度を設定してください。")
+                        }
+                        goalError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    },
+                )
             }
         }
     }

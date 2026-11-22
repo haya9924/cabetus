@@ -9,6 +9,7 @@ import org.cabetus.data.local.ClassSessionDao
 import org.cabetus.data.local.LocalAttendanceDao
 import org.cabetus.data.local.MoodleCourseDao
 import org.cabetus.data.local.TimetableDao
+import org.cabetus.data.network.NetworkMonitor
 import org.cabetus.data.settings.SettingsRepository
 import org.cabetus.domain.AttendanceResolver
 import org.cabetus.domain.AttendanceSource
@@ -86,6 +87,7 @@ class TimetableViewModel @Inject constructor(
     private val syncScheduler: org.cabetus.work.ClassAttendanceSyncScheduler,
     private val backgroundTour: org.cabetus.ui.browser.ClassAttendanceBackgroundController,
     private val moodleCourseDao: MoodleCourseDao,
+    private val networkMonitor: NetworkMonitor,
 ) : ViewModel() {
 
     val mobileConfirmationUpdates = mobileConfirmations.observeAll()
@@ -93,6 +95,29 @@ class TimetableViewModel @Inject constructor(
 
     val syncWork = syncScheduler.work.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val backgroundStatus = backgroundTour.status
+    val scheduleStatus = backgroundTour.scheduleStatus
+    val scheduleCourseMappings = settingsRepository.classAttendanceMappings
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    suspend fun autoRefreshScheduleNotices() {
+        // Also retry when a busy browser or attendance tour releases the shared slot.
+        // The controller applies the same backoff as Home, so this cannot create a refresh loop.
+        combine(
+            networkMonitor.status,
+            backgroundTour.browserSession,
+            backgroundTour.status,
+            backgroundTour.mobileStatus,
+            backgroundTour.scheduleStatus,
+        ) { network, _, attendance, mobile, schedule ->
+            network.isKnown && network.isConnected && !attendance.running && !mobile.running && !schedule.running
+        }.collect { canRefresh ->
+            if (canRefresh) backgroundTour.tryStartScheduleNotices()
+        }
+    }
+
+    fun refreshScheduleNotices(): Boolean = backgroundTour.tryStartScheduleNotices(manual = true)
+
+    suspend fun openForegroundBrowser(launch: () -> Boolean): Boolean = backgroundTour.openForeground(launch)
     suspend fun startAttendanceSync() {
         require(settingsRepository.current().academicYear in 2000..2100)
         backgroundTour.start()
@@ -162,7 +187,8 @@ class TimetableViewModel @Inject constructor(
         val rows = mergedRows(code)
         val summary = AttendanceResolver.summarize(rows.map { it.status })
         val settings = settingsRepository.current()
-        val displayName = course?.name?.takeIf { it.isNotBlank() } ?: cell?.courseName ?: code
+        val displayName = course?.name?.takeIf { it.isNotBlank() && it != code }
+            ?: cell?.courseName?.takeIf { it.isNotBlank() } ?: code
         return CourseDetail(
             code = code,
             name = displayName,

@@ -2,6 +2,7 @@ package org.cabetus.ui.browser
 
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,8 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
     val mobileStatus = mobileMutable.asStateFlow()
     private val scheduleMutable = MutableStateFlow(ScheduleStatus())
     val scheduleStatus = scheduleMutable.asStateFlow()
+    private var scheduleAttemptElapsed: Long? = null
+    private var scheduleAttemptSession: Long? = null
     private val browserSessionMutable = MutableStateFlow(0L)
     val browserSession = browserSessionMutable
     // Main-thread ownership gate: no second foreground or background WebView during a tour.
@@ -113,8 +116,17 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
      * 変更通知一覧の自動読取を開始する。既存の出欠巡回・モバイル出席確認とは排他。
      * 前回の検証済み一覧は開始時・失敗時とも保持し、成功時だけ差し替える。
      */
-    fun tryStartScheduleNotices(): Boolean {
+    fun tryStartScheduleNotices(manual: Boolean = false): Boolean {
         if (isBrowserBusy || foregroundRequested) return false
+        val session = browserSession.value
+        val now = SystemClock.elapsedRealtime()
+        val minimumInterval = if (manual) 5_000L else 15 * 60_000L
+        if (scheduleAttemptSession == session &&
+            (scheduleStatus.value.authRequired ||
+                scheduleAttemptElapsed?.let { now - it < minimumInterval } == true)
+        ) return false
+        scheduleAttemptElapsed = now
+        scheduleAttemptSession = session
         scheduleMutable.value = scheduleMutable.value.copy(running = true, failed = false, authRequired = false)
         return try {
             ContextCompat.startForegroundService(
