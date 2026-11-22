@@ -39,7 +39,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.cabetus.domain.Campus
 import org.cabetus.ui.login.LoginScreen
-import org.cabetus.ui.pdf.PdfImportScreen
 
 private const val APP_NAME = "cabetus"
 
@@ -83,12 +82,10 @@ fun SetupScreen(
 
         2 -> LoginScreen(onDone = { step = 3 })
 
-        3 -> PdfImportScreen(onDone = { step = 4 })
-
-        4 -> StepScaffold(
+        3 -> StepScaffold(
             title = "キャンパスを選択",
             body = "天気予報に使用します。",
-            onNext = { step = 5 },
+            onNext = { step = 4 },
             content = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Campus.entries.forEach { c ->
@@ -102,12 +99,12 @@ fun SetupScreen(
             },
         )
 
-        5 -> AiStep(
-            onSave = { b, k, m -> viewModel.saveAi(b, k, m); step = 6 },
-            onSkip = { step = 6 },
+        4 -> AiStep(
+            onSave = { b, k, m -> viewModel.saveAi(b, k, m); step = 5 },
+            onSkip = { step = 5 },
         )
 
-        6 -> CompletionStep(
+        5 -> CompletionStep(
             onComplete = { viewModel.complete(); onFinished() },
             onTweet = {
                 val text = Uri.encode("${APP_NAME}を始めました！ $GITHUB_URL #cabetus #キャベツ")

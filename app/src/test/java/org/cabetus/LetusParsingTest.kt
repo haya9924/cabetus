@@ -120,6 +120,155 @@ class LetusParsingTest {
             SubmissionStatus.COMPLETED,
             LetusParsing.extractSubmissionStatus("受験済み", "/mod/quiz/view.php"),
         )
+        assertEquals(
+            SubmissionStatus.COMPLETED,
+            LetusParsing.extractSubmissionStatus("ステータス: 終了", "/mod/quiz/view.php"),
+        )
+    }
+
+    @Test
+    fun submissionStatus_englishNegationIsNotTreatedAsSubmitted() {
+        assertEquals(
+            SubmissionStatus.NOT_SUBMITTED,
+            LetusParsing.extractSubmissionStatus("Submission status: Not submitted", "/mod/assign/view.php"),
+        )
+        assertEquals(
+            SubmissionStatus.NOT_SUBMITTED,
+            LetusParsing.extractSubmissionStatus("No submission", "/mod/assign/view.php"),
+        )
+        assertEquals(
+            SubmissionStatus.SUBMITTED,
+            LetusParsing.extractSubmissionStatus("Submission status: Submitted", "/mod/assign/view.php"),
+        )
+    }
+
+    @Test
+    fun submissionStatus_quizNotFinishedIsNotCompleted() {
+        assertEquals(
+            SubmissionStatus.NOT_SUBMITTED,
+            LetusParsing.extractSubmissionStatus("Status: Not finished", "/mod/quiz/view.php"),
+        )
+        assertEquals(
+            SubmissionStatus.NOT_SUBMITTED,
+            LetusParsing.extractSubmissionStatus("Not yet attempted", "/mod/quiz/view.php"),
+        )
+    }
+
+    @Test
+    fun submissionStatus_japaneseNegationStaysNotSubmitted() {
+        assertEquals(
+            SubmissionStatus.NOT_SUBMITTED,
+            LetusParsing.extractSubmissionStatus("提出ステータス 未 提出", "/mod/assign/view.php"),
+        )
+    }
+
+    // ─── 提出状況テーブル（実ページ .submissionstatustable） ─────────────
+
+    private val assignUrl = "https://letus.ed.tus.ac.jp/mod/assign/view.php?id=2284228"
+
+    private fun statusTableHtml(vararg rows: String): String =
+        "<html><body><table class=\"submissionstatustable\"><tbody>" +
+            rows.joinToString("") + "</tbody></table></body></html>"
+
+    @Test
+    fun submissionStatusFromHtml_actualSubmittedFixture() {
+        // 実機ページ（id=2284228）の該当行。ページ全体には「未提出」等が散在している。
+        val html = "<html><body>" +
+            "<div>この課題は未提出の他の課題とは異なります。Not submitted の表示は無視。</div>" +
+            "<table class=\"submissionstatustable\"><tbody>" +
+            "<tr><th>提出ステータス</th><td>評定のために提出済み</td></tr>" +
+            "</tbody></table>" +
+            "<div>Submitted という語もページ内に存在する</div>" +
+            "</body></html>"
+        assertEquals(
+            SubmissionStatus.SUBMITTED,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_unrelatedNotSubmittedTextIgnored() {
+        val html = "<html><body>未提出 Not submitted" +
+            statusTableHtml("<tr><th>提出ステータス</th><td>評定のために提出済み</td></tr>") +
+            "</body></html>"
+        assertEquals(
+            SubmissionStatus.SUBMITTED,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_actualNotSubmitted() {
+        val html = statusTableHtml("<tr><th>提出ステータス</th><td>未提出</td></tr>")
+        assertEquals(
+            SubmissionStatus.NOT_SUBMITTED,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_englishLabelNotSubmitted() {
+        val html = statusTableHtml("<tr><th>Submission status:</th><td>Not submitted</td></tr>")
+        assertEquals(
+            SubmissionStatus.NOT_SUBMITTED,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_unknownValueStaysUnknown() {
+        val html = statusTableHtml("<tr><th>提出ステータス</th><td>なにか不明な状態</td></tr>")
+        assertEquals(
+            SubmissionStatus.UNKNOWN,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_unknownValueWithOutsideSubmittedStaysUnknown() {
+        val html = "<html><body>Submitted 提出済み" +
+            statusTableHtml("<tr><th>提出ステータス</th><td>なにか不明な状態</td></tr>") +
+            "</body></html>"
+        assertEquals(
+            SubmissionStatus.UNKNOWN,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_duplicateConflictingRowsUnknown() {
+        val html = statusTableHtml(
+            "<tr><th>提出ステータス</th><td>提出済み</td></tr>",
+            "<tr><th>提出ステータス</th><td>未提出</td></tr>",
+        )
+        assertEquals(
+            SubmissionStatus.UNKNOWN,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_missingRowFallsBackToPlainText() {
+        val html = "<html><body><table class=\"submissionstatustable\">" +
+            "<tr><th>評定</th><td>100</td></tr></table>提出ステータス 提出済み</body></html>"
+        assertEquals(
+            SubmissionStatus.SUBMITTED,
+            LetusParsing.extractSubmissionStatusFromHtml(html, assignUrl),
+        )
+    }
+
+    @Test
+    fun submissionStatusFromHtml_quizUnchanged() {
+        val quizUrl = "https://letus.ed.tus.ac.jp/mod/quiz/view.php?id=1"
+        val html = statusTableHtml("<tr><th>提出ステータス</th><td>評定のために提出済み</td></tr>")
+        assertEquals(
+            SubmissionStatus.UNKNOWN,
+            LetusParsing.extractSubmissionStatusFromHtml(html, quizUrl),
+        )
+        assertEquals(
+            SubmissionStatus.COMPLETED,
+            LetusParsing.extractSubmissionStatusFromHtml("<html><body>受験済み</body></html>", quizUrl),
+        )
     }
 
     @Test
@@ -221,5 +370,15 @@ class LetusParsingTest {
         assertTrue(LetusParsing.parseEnrolledCourses("""[{"error":true,"exception":{}}]""").isEmpty())
         assertTrue(LetusParsing.parseEnrolledCourses("not json").isEmpty())
         assertTrue(LetusParsing.parseEnrolledCourses("[]").isEmpty())
+    }
+
+    @Test
+    fun parseEnrolledCoursesOrNull_distinguishesEmptyFromFailure() {
+        val emptySuccess =
+            """[{"error":false,"data":{"nextoffset":0,"courses":[]}}]"""
+        assertEquals(emptyList<LetusParsing.Link>(), LetusParsing.parseEnrolledCoursesOrNull(emptySuccess))
+        assertNull(LetusParsing.parseEnrolledCoursesOrNull("""[{"error":true,"exception":{}}]"""))
+        assertNull(LetusParsing.parseEnrolledCoursesOrNull("not json"))
+        assertNull(LetusParsing.parseEnrolledCoursesOrNull("[]"))
     }
 }

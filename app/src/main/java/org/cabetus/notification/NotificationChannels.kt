@@ -10,6 +10,7 @@ object NotificationChannels {
     const val DAILY_SUMMARY = "daily_summary"
     const val CLASS_START = "class_start"
     const val ATTENDANCE_REMINDER = "attendance_reminder"
+    const val ATTENDANCE_RISK = "attendance_risk"
     const val DEADLINE = "deadline"
     const val NEW_ASSIGNMENT = "new_assignment"
     const val LETUS_CHANGE = "letus_change"
@@ -29,11 +30,14 @@ object NotificationChannels {
                 ATTENDANCE_REMINDER, "出席チェックのリマインド", NotificationManager.IMPORTANCE_HIGH,
             ).apply { description = "授業終了前に出席が未記録のときのお知らせ" },
             NotificationChannel(
+                ATTENDANCE_RISK, "欠席リスク", NotificationManager.IMPORTANCE_HIGH,
+            ).apply { description = "欠席可能回数が少なくなったときのお知らせ" },
+            NotificationChannel(
                 DEADLINE, "課題の期日", NotificationManager.IMPORTANCE_HIGH,
             ).apply { description = "課題の期日が近いお知らせ" },
             NotificationChannel(
-                NEW_ASSIGNMENT, "新規課題", NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply { description = "新しい課題が見つかったお知らせ" },
+                NEW_ASSIGNMENT, "課題の新規検出", NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply { description = "初めて取得した課題を科目・締切とともにお知らせします" },
             NotificationChannel(
                 LETUS_CHANGE, "LETUSの変更", NotificationManager.IMPORTANCE_DEFAULT,
             ).apply { description = "既存の課題の締切・内容が変わったお知らせ" },

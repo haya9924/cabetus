@@ -2,13 +2,19 @@ package org.cabetus.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import org.cabetus.data.local.TimetableDao
 import org.cabetus.data.settings.AppSettings
 import org.cabetus.data.settings.SettingsRepository
 import org.cabetus.notification.AlarmScheduler
+import org.cabetus.ui.browser.ClassAttendanceBackgroundController
 import org.cabetus.work.FetchScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -18,7 +24,26 @@ class MainViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val alarmScheduler: AlarmScheduler,
     private val fetchScheduler: FetchScheduler,
+    private val timetableDao: TimetableDao,
+    private val classBrowser: ClassAttendanceBackgroundController,
 ) : ViewModel() {
+
+    private var attemptedBrowserSession: Long? = null
+
+    suspend fun openForegroundBrowser(launch: () -> Boolean): Boolean = classBrowser.openForeground(launch)
+
+    /** Called only while MainActivity is resumed, including just after onboarding. */
+    suspend fun bootstrapTimetableWhileResumed() {
+        combine(settings, timetableDao.observeAll(), classBrowser.browserSession) { current, cells, session ->
+            session.takeIf { current?.setupCompleted == true && cells.isEmpty() }
+        }.distinctUntilChanged().collectLatest { session ->
+            if (session == null || session == attemptedBrowserSession) return@collectLatest
+            // Also retry after returning from the browser: the user may have opened it
+            // to sign in before the initial attempt could report an authentication error.
+            while (!classBrowser.tryStartInitialTimetable()) delay(500)
+            attemptedBrowserSession = session
+        }
+    }
 
     val settings: StateFlow<AppSettings?> = settingsRepository.settings
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)

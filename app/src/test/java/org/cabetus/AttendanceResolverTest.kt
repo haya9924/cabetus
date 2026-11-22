@@ -30,14 +30,88 @@ class AttendanceResolverTest {
 
     @Test
     fun resolve_manual_override_wins() {
-        // 手動修正はPDFマーク・アプリ記録より優先される
+        // 手動修正はPDFマーク・アプリ記録より優先される（モバイル登録がなければ）
         val r = AttendanceResolver.resolve(
             mark = "〇",
             hasLocalCheck = true,
             overrideStatus = AttendanceStatus.ABSENT,
+            hasMobileConfirmation = false,
         )
         assertEquals(AttendanceStatus.ABSENT, r.status)
         assertEquals(AttendanceSource.MANUAL, r.source)
+    }
+
+    @Test
+    fun resolve_mobile_confirmation_beats_each_manual_status() {
+        // モバイル出席登録は、どんな手動修正よりも優先される
+        for (manual in AttendanceStatus.values()) {
+            val r = AttendanceResolver.resolve(
+                mark = "×",
+                hasLocalCheck = true,
+                overrideStatus = manual,
+                hasMobileConfirmation = true,
+            )
+            assertEquals(
+                "manual=$manual のときモバイル登録が優先されるべき",
+                AttendanceStatus.PRESENT,
+                r.status,
+            )
+            assertEquals(AttendanceSource.MOBILE_REGISTRATION, r.source)
+        }
+    }
+
+    @Test
+    fun resolve_mobile_confirmation_beats_local_and_mark() {
+        // モバイル登録はローカル記録・PDFマークよりも優先される
+        val withLocalAndMark = AttendanceResolver.resolve(
+            mark = "×",
+            hasLocalCheck = true,
+            overrideStatus = null,
+            hasMobileConfirmation = true,
+        )
+        assertEquals(AttendanceStatus.PRESENT, withLocalAndMark.status)
+        assertEquals(AttendanceSource.MOBILE_REGISTRATION, withLocalAndMark.source)
+
+        // ローカル記録もマークもない場合でも、登録があればMOBILE_REGISTRATION
+        val onlyMobile = AttendanceResolver.resolve(
+            mark = null,
+            hasLocalCheck = false,
+            overrideStatus = null,
+            hasMobileConfirmation = true,
+        )
+        assertEquals(AttendanceStatus.PRESENT, onlyMobile.status)
+        assertEquals(AttendanceSource.MOBILE_REGISTRATION, onlyMobile.source)
+    }
+
+    @Test
+    fun resolve_without_mobile_confirmation_keeps_old_precedence() {
+        // hasMobileConfirmation=false なら従来の優先順位のまま
+        val manual = AttendanceResolver.resolve(
+            mark = "〇",
+            hasLocalCheck = true,
+            overrideStatus = AttendanceStatus.LATE,
+            hasMobileConfirmation = false,
+        )
+        assertEquals(AttendanceStatus.LATE, manual.status)
+        assertEquals(AttendanceSource.MANUAL, manual.source)
+
+        val local = AttendanceResolver.resolve(
+            mark = "×",
+            hasLocalCheck = true,
+            overrideStatus = null,
+            hasMobileConfirmation = false,
+        )
+        assertEquals(AttendanceStatus.PRESENT, local.status)
+        assertEquals(AttendanceSource.LOCAL, local.source)
+
+        val fromMark = AttendanceResolver.resolve(
+            mark = "×",
+            hasLocalCheck = false,
+            overrideStatus = null,
+            hasMobileConfirmation = false,
+        )
+        assertEquals(AttendanceStatus.ABSENT, fromMark.status)
+        assertEquals(AttendanceSource.PDF, fromMark.source)
     }
 
     @Test

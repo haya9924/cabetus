@@ -1,7 +1,6 @@
 package org.cabetus.di
 
 import android.content.Context
-import android.webkit.WebSettings
 import org.cabetus.data.letus.WebViewCookieJar
 import dagger.Module
 import dagger.Provides
@@ -20,9 +19,10 @@ object NetworkModule {
     @Provides
     @Singleton
     @Named("userAgent")
-    fun provideUserAgent(@ApplicationContext context: Context): String =
-        runCatching { WebSettings.getDefaultUserAgent(context) }
-            .getOrDefault("Mozilla/5.0 (Linux; Android) AppleWebKit/537.36")
+    // Never initialize Chromium while holding a Hilt singleton lock. A worker can
+    // wait for main here while main waits for the same OkHttp singleton: startup ANR.
+    fun provideUserAgent(): String =
+        "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 (KHTML, like Gecko) Mobile Safari/537.36"
 
     @Provides
     @Singleton

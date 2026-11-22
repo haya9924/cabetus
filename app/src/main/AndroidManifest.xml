@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:name=".TusApp"
@@ -34,6 +35,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- アプリ内ブラウザ。explicit Intent 専用（外部アプリからは起動不可）。 -->
+        <activity
+            android:name=".ui.browser.BrowserActivity"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.TUSapp"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".notification.AttendanceCheckActivity"
@@ -85,6 +96,12 @@
         <receiver
             android:name=".notification.AlarmReceiver"
             android:exported="false" />
+
+        <service android:name=".ui.browser.ClassAttendanceTourService"
+            android:exported="false" android:foregroundServiceType="dataSync" />
+
+        <service android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync" tools:node="merge" />
 
         <!-- Disable default WorkManager initializer; we use a custom HiltWorkerFactory -->
         <provider

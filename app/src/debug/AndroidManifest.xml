@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- debug ビルド専用。オフスクリーン WebView プローブ用の Service のみを追加する。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- DUMP 権限が無い呼び出し元からは起動できない。debug ビルドにのみ含まれる。 -->
+        <service
+            android:name="org.cabetus.debug.OffscreenWebViewProbeService"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:foregroundServiceType="dataSync">
+            <intent-filter>
+                <action android:name="org.cabetus.debug.probe.START" />
+                <action android:name="org.cabetus.debug.probe.STOP" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

@@ -3,7 +3,6 @@ package org.cabetus
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import org.cabetus.notification.NotificationChannels
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -19,9 +18,18 @@ class TusApp : Application(), Configuration.Provider {
             .setWorkerFactory(workerFactory)
             .build()
 
+    @Inject
+    lateinit var attendanceGoalMonitor: org.cabetus.domain.AttendanceGoalMonitor
+
     override fun onCreate() {
         super.onCreate()
-        PDFBoxResourceLoader.init(applicationContext)
         NotificationChannels.createAll(this)
+        androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "attendance-goal-check",
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            androidx.work.PeriodicWorkRequestBuilder<org.cabetus.work.AttendanceGoalWorker>(
+                15, java.util.concurrent.TimeUnit.MINUTES,
+            ).build(),
+        )
     }
 }

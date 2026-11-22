@@ -10,6 +10,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,10 +29,15 @@ private data class MoreItem(val label: String, val icon: ImageVector, val onClic
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MoreScreen(onOpenSettings: () -> Unit) {
+fun MoreScreen(
+    onOpenSettings: () -> Unit,
+    onOpenClass: () -> Unit,
+    onOpenGpCalculator: () -> Unit,
+) {
     val items = listOf(
+        MoreItem("CLASS", Icons.Filled.School, onOpenClass),
+        MoreItem("GP電卓", Icons.Filled.Calculate, onOpenGpCalculator),
         MoreItem("設定", Icons.Filled.Settings, onOpenSettings),
-        // 将来ここに機能アイコンを追加していく
     )
     Scaffold(topBar = { TopAppBar(title = { Text("その他") }) }) { padding ->
         LazyVerticalGrid(

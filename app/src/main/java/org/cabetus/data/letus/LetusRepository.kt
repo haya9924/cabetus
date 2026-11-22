@@ -9,7 +9,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -32,7 +34,13 @@ sealed interface FetchResult {
         val newAssignments: List<AssignmentEntity>,
         val dueSoon: List<AssignmentEntity>,
         val changed: List<AssignmentChange>,
-    ) : FetchResult
+        /** 取得に失敗したページ数。0 でなければ一部のみ更新されている。 */
+        val failedRequests: Int = 0,
+        /** 初回取得（既存課題がDBに無い）かどうか。初回は新規通知を抑える用途に使う。 */
+        val isInitialImport: Boolean = false,
+    ) : FetchResult {
+        val isPartial: Boolean get() = failedRequests > 0
+    }
 
     data object LoginRequired : FetchResult
     data class NetworkError(val message: String) : FetchResult
@@ -50,6 +58,12 @@ class LetusRepository @Inject constructor(
 ) {
 
     enum class LoginStatus { OK, LOGIN_REQUIRED, NETWORK_ERROR }
+
+    /**
+     * [fetchAll] 全体を直列化する。Worker と手動取得が同時に走ると、
+     * 互いの途中経過を既存行（差分判定の基準）として読んでしまうため。
+     */
+    private val fetchMutex = Mutex()
 
     /** ログイン状態を確認し、必要ならサイレント再認証を1度試みる。 */
     suspend fun ensureLoggedIn(): LoginStatus = withContext(Dispatchers.IO) {
@@ -81,6 +95,9 @@ class LetusRepository @Inject constructor(
 
     /** コース・課題を取得。 */
     suspend fun fetchAll(scanLevel: ScanLevel = ScanLevel.STANDARD): FetchResult =
+        fetchMutex.withLock { fetchAllLocked(scanLevel) }
+
+    private suspend fun fetchAllLocked(scanLevel: ScanLevel): FetchResult =
         withContext(Dispatchers.IO) {
             when (ensureLoggedIn()) {
                 LoginStatus.LOGIN_REQUIRED -> return@withContext FetchResult.LoginRequired
@@ -92,92 +109,155 @@ class LetusRepository @Inject constructor(
             val existingBefore = assignmentDao.getAll().associateBy { it.id }
 
             // ① コース発見
-            // discoverCourses() は常に enabled=true で構築するため、
-            // ユーザーが非表示にしたコースの enabled を既存行から引き継いで保持する。
-            val courses = discoverCourses()
-            if (courses.isNotEmpty()) {
-                val existingCourses = courseDao.getAll().associateBy { it.id }
-                val merged = courses.map { c ->
-                    c.copy(enabled = existingCourses[c.id]?.enabled ?: true)
-                }
-                courseDao.upsertAll(merged)
+            // discovered は常に enabled=true で構築される。既存行の enabled（ユーザー設定）を
+            // 上書きしないよう、新規追加とメタデータ更新のみを DAO 側のトランザクションで行う。
+            val discovery = discoverCourses()
+            if (discovery.loginRequired) return@withContext FetchResult.LoginRequired
+            var failedRequests = discovery.failedRequests
+            if (discovery.courses.isNotEmpty()) {
+                courseDao.mergeDiscovered(discovery.courses)
             }
             val enabled = courseDao.getEnabled()
 
+            // コース一覧が空で、その原因が取得失敗なら「0件成功」にしない。
+            if (enabled.isEmpty()) {
+                return@withContext if (failedRequests > 0) {
+                    FetchResult.NetworkError("コース一覧を取得できませんでした")
+                } else {
+                    FetchResult.Success(0, emptyList(), emptyList(), emptyList())
+                }
+            }
+
             // ② 課題候補抽出（同時3並列）
-            val candidates = mapWithConcurrency(enabled, 3) { course ->
-                runCatching {
-                    val html = get(course.url) ?: return@runCatching emptyList()
-                    LetusParsing.extractLinks(html, course.url)
-                        .filter { LetusParsing.isAssignmentLikeLink(it.title, it.url, scanLevel) }
-                        .map { link ->
-                            Candidate(
-                                id = LetusParsing.candidateId(course.id, link.url),
-                                courseId = course.id,
-                                courseName = course.name,
-                                title = link.title,
-                                url = link.url,
-                            )
-                        }
-                }.getOrDefault(emptyList())
-            }.flatten().distinctBy { it.id }
+            val courseFetches = mapWithConcurrency(enabled, 3) { course ->
+                when (val page = getPage(course.url)) {
+                    is PageResult.Ok -> runCatching {
+                        val links = LetusParsing.extractLinks(page.html, course.url)
+                            .filter { LetusParsing.isAssignmentLikeLink(it.title, it.url, scanLevel) }
+                        CourseFetch(
+                            course = course,
+                            candidates = links.map { link ->
+                                Candidate(
+                                    id = LetusParsing.candidateId(course.id, link.url),
+                                    courseId = course.id,
+                                    courseName = course.name,
+                                    title = link.title,
+                                    url = link.url,
+                                )
+                            },
+                        )
+                    }.getOrElse {
+                        CourseFetch(course = course, failed = true)
+                    }
+
+                    PageResult.LoginRequired -> CourseFetch(course = course, loginRequired = true)
+                    PageResult.Failed -> CourseFetch(course = course, failed = true)
+                }
+            }
+            if (courseFetches.any { it.loginRequired }) {
+                return@withContext FetchResult.LoginRequired
+            }
+            val failedCourseRequests = courseFetches.count { it.failed }
+            failedRequests += failedCourseRequests
+            if (failedCourseRequests == enabled.size) {
+                return@withContext FetchResult.NetworkError("コースページを取得できませんでした")
+            }
+            val candidates = courseFetches.flatMap { it.candidates }.distinctBy { it.id }
 
             // ③ 各候補の締切・提出状況（同時5並列）
             val now = System.currentTimeMillis()
-            val assignments = mapWithConcurrency(candidates, 5) { c ->
-                runCatching {
-                    val html = get(c.url) ?: return@runCatching null
-                    val plain = LetusParsing.htmlToPlainText(html)
-                    val deadlineText = LetusParsing.extractDeadlineText(plain)
-                    val deadline = if (deadlineText.isNotEmpty()) {
-                        LetusParsing.parseDeadline(deadlineText)
-                    } else {
-                        null
+            val candidateFetches = mapWithConcurrency(candidates, 5) { c ->
+                when (val page = getPage(c.url)) {
+                    is PageResult.Ok -> runCatching {
+                        val plain = LetusParsing.htmlToPlainText(page.html)
+                        val deadlineText = LetusParsing.extractDeadlineText(plain)
+                        val deadline = if (deadlineText.isNotEmpty()) {
+                            LetusParsing.parseDeadline(deadlineText)
+                        } else {
+                            null
+                        }
+                        val submission = LetusParsing.extractSubmissionStatusFromHtml(page.html, c.url)
+                        val lifecycle = LetusParsing.resolveLifecycle(plain, submission, deadline, now)
+                        val prev = existingBefore[c.id]
+                        val current = AssignmentEntity(
+                            id = c.id,
+                            courseId = c.courseId,
+                            courseName = c.courseName,
+                            title = c.title,
+                            url = c.url,
+                            deadline = deadline,
+                            deadlineText = deadlineText,
+                            submissionStatus = submission,
+                            lifecycleStatus = lifecycle,
+                            detectedAt = prev?.detectedAt ?: now,
+                            firstSeenAt = prev?.firstSeenAt ?: now,
+                            lastCheckedAt = now,
+                            ignored = prev?.ignored ?: false,
+                        )
+                        CandidateFetch(
+                            assignment = AssignmentMerge.merge(current, prev),
+                            // 変更検出はマージ前の今回値で行う。マージ後では解析失敗時に
+                            // 前回の締切が残り、今回の解析状態を区別できない。
+                            changeLabels = AssignmentMerge.changeLabels(prev, current),
+                        )
+                    }.getOrElse {
+                        CandidateFetch(failed = true)
                     }
-                    val submission = LetusParsing.extractSubmissionStatus(plain, c.url)
-                    val lifecycle = LetusParsing.resolveLifecycle(plain, submission, deadline, now)
-                    val prev = existingBefore[c.id]
-                    AssignmentEntity(
-                        id = c.id,
-                        courseId = c.courseId,
-                        courseName = c.courseName,
-                        title = c.title,
-                        url = c.url,
-                        deadline = deadline,
-                        deadlineText = deadlineText,
-                        submissionStatus = submission,
-                        lifecycleStatus = lifecycle,
-                        detectedAt = prev?.detectedAt ?: now,
-                        firstSeenAt = prev?.firstSeenAt ?: now,
-                        lastCheckedAt = now,
-                        ignored = prev?.ignored ?: false,
-                    )
-                }.getOrNull()
-            }.filterNotNull()
 
+                    PageResult.LoginRequired -> CandidateFetch(loginRequired = true)
+                    PageResult.Failed -> CandidateFetch(failed = true)
+                }
+            }
+            if (candidateFetches.any { it.loginRequired }) {
+                return@withContext FetchResult.LoginRequired
+            }
+
+            val failedDetailRequests = candidateFetches.count { it.failed }
+            failedRequests += failedDetailRequests
+            // 候補は存在するのに全件の詳細取得に失敗した場合は、成功0件扱いにしない。
+            if (candidates.isNotEmpty() && failedDetailRequests == candidates.size) {
+                return@withContext FetchResult.NetworkError("課題ページを取得できませんでした")
+            }
+
+            val assignments = candidateFetches.mapNotNull { it.assignment }
+            // 1件も更新できず、かつ失敗したページがある場合は、成功0件として扱わない。
+            if (assignments.isEmpty() && failedRequests > 0) {
+                return@withContext FetchResult.NetworkError("課題を取得できませんでした")
+            }
             if (assignments.isNotEmpty()) assignmentDao.upsertAll(assignments)
 
-            val newOnes = assignments.filter { existingBefore[it.id] == null }
+            val isInitialImport = existingBefore.isEmpty()
+            val newOnes = assignments.filter {
+                existingBefore[it.id] == null && AssignmentMerge.isNewNotificationEligible(it, now)
+            }
             val dueSoon = assignments.filter {
-                it.deadline != null &&
+                !it.ignored &&
+                    it.submissionStatus != org.cabetus.data.local.SubmissionStatus.SUBMITTED &&
+                    it.submissionStatus != org.cabetus.data.local.SubmissionStatus.COMPLETED &&
+                    it.deadline != null &&
                     it.deadline in (now + 1)..(now + 24L * 60 * 60 * 1000) &&
                     it.lifecycleStatus == org.cabetus.data.local.LifecycleStatus.ACTIVE
             }
             // 既存課題の変更（締切・タイトル）を検出。新規は newOnes 側で扱うため除外。
+            // 締切は deadlineText 全体ではなく解析済みの締切時刻で比較する。
             // 差分は upsert 前に取得した existingBefore と比較するので、次回は再通知されない。
-            val changed = assignments.mapNotNull { a ->
-                val prev = existingBefore[a.id] ?: return@mapNotNull null
-                if (a.ignored) return@mapNotNull null
-                val diffs = buildList {
-                    if (a.deadlineText.trim() != prev.deadlineText.trim()) {
-                        add("締切: ${a.deadlineText.ifBlank { "なし" }}")
-                    }
-                    if (a.title != prev.title) add("タイトルが変更されました")
+            val changed = candidateFetches.mapNotNull { fetch ->
+                val assignment = fetch.assignment ?: return@mapNotNull null
+                if (fetch.changeLabels.isEmpty()) {
+                    null
+                } else {
+                    AssignmentChange(assignment, fetch.changeLabels)
                 }
-                if (diffs.isEmpty()) null else AssignmentChange(a, diffs)
             }
 
-            FetchResult.Success(assignments.size, newOnes, dueSoon, changed)
+            FetchResult.Success(
+                detected = assignments.size,
+                newAssignments = newOnes,
+                dueSoon = dueSoon,
+                changed = changed,
+                failedRequests = failedRequests,
+                isInitialImport = isInitialImport,
+            )
         }
 
     /**
@@ -187,9 +267,10 @@ class LetusRepository @Inject constructor(
      * AJAX API（core_course_get_enrolled_courses_by_timeline_classification）で
      * 確実に列挙し、失敗時のみHTMLリンク走査へフォールバックする。
      */
-    private fun discoverCourses(): List<MoodleCourseEntity> {
+    private fun discoverCourses(): CourseDiscovery {
         val now = System.currentTimeMillis()
         val map = LinkedHashMap<String, MoodleCourseEntity>()
+        var failedRequests = 0
 
         fun add(name: String, url: String) {
             val cleanUrl = url.substringBefore('#')
@@ -203,48 +284,114 @@ class LetusRepository @Inject constructor(
         }
 
         // ① AJAX API（推奨経路）
-        val myHtml = get(LetusConstants.MY_URL)
+        val myPage = getPage(LetusConstants.MY_URL)
+        if (myPage == PageResult.LoginRequired) {
+            return CourseDiscovery(emptyList(), failedRequests, loginRequired = true)
+        }
+        if (myPage == PageResult.Failed) failedRequests++
+        val myHtml = (myPage as? PageResult.Ok)?.html
+
         val sesskey = myHtml?.let { LetusParsing.extractSesskey(it) }
         if (sesskey != null) {
-            fetchEnrolledCoursesViaAjax(sesskey).forEach { add(it.title, it.url) }
+            val ajax = fetchEnrolledCoursesViaAjax(sesskey)
+            if (ajax.loginRequired) {
+                return CourseDiscovery(emptyList(), failedRequests, loginRequired = true)
+            }
+            if (ajax.courses != null) {
+                ajax.courses.forEach { add(it.title, it.url) }
+            } else if (ajax.failed) {
+                failedRequests++
+            }
         }
 
-        // ② フォールバック: サーバレンダリングHTMLのリンク走査
+        // ② フォールバック: サーバーレンダリングHTMLのリンク走査
         if (map.isEmpty()) {
-            val pages = buildList {
-                if (myHtml != null) add(LetusConstants.MY_URL to myHtml)
-                for (indexUrl in LetusConstants.COURSE_INDEX_URLS) {
-                    if (indexUrl == LetusConstants.MY_URL) continue
-                    get(indexUrl)?.let { add(indexUrl to it) }
+            val pages = mutableListOf<Pair<String, String>>()
+            if (myHtml != null) pages += LetusConstants.MY_URL to myHtml
+            for (indexUrl in LetusConstants.COURSE_INDEX_URLS) {
+                if (indexUrl == LetusConstants.MY_URL) continue
+                when (val page = getPage(indexUrl)) {
+                    is PageResult.Ok -> pages += indexUrl to page.html
+                    PageResult.LoginRequired ->
+                        return CourseDiscovery(emptyList(), failedRequests, loginRequired = true)
+                    PageResult.Failed -> failedRequests++
                 }
             }
             for ((baseUrl, html) in pages) {
                 LetusParsing.extractLinks(html, baseUrl).forEach { add(it.title, it.url) }
             }
         }
-        return map.values.toList()
+
+        // フォールバックでコースを発見できた場合、AJAX等の失敗は結果に影響しない。
+        if (map.isNotEmpty()) failedRequests = 0
+        return CourseDiscovery(map.values.toList(), failedRequests, loginRequired = false)
     }
 
-    private fun fetchEnrolledCoursesViaAjax(sesskey: String): List<LetusParsing.Link> = try {
+    private fun fetchEnrolledCoursesViaAjax(sesskey: String): AjaxCourses = try {
         val url = LetusConstants.AJAX_SERVICE_URL +
             "?sesskey=$sesskey&info=core_course_get_enrolled_courses_by_timeline_classification"
         val body = LetusParsing.enrolledCoursesRequestBody()
             .toRequestBody("application/json".toMediaType())
         client.newCall(Request.Builder().url(url).post(body).build()).execute().use { resp ->
-            if (!resp.isSuccessful) return emptyList()
-            LetusParsing.parseEnrolledCourses(resp.body?.string().orEmpty())
+            if (!resp.isSuccessful) return AjaxCourses(failed = true)
+            if (!LetusParsing.isAuthenticatedLetusUrl(resp.request.url.toString())) {
+                return AjaxCourses(loginRequired = true)
+            }
+            val text = resp.body?.string().orEmpty()
+            if (LetusParsing.isNotLoggedInPage(text)) return AjaxCourses(loginRequired = true)
+            val courses = LetusParsing.parseEnrolledCoursesOrNull(text)
+            AjaxCourses(courses = courses, failed = courses == null)
         }
     } catch (_: Exception) {
-        emptyList()
+        AjaxCourses(failed = true)
     }
 
-    private fun get(url: String): String? = try {
+    private fun getPage(url: String): PageResult = try {
         client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
-            if (resp.isSuccessful) resp.body?.string() else null
+            if (!resp.isSuccessful) return PageResult.Failed
+            if (!LetusParsing.isAuthenticatedLetusUrl(resp.request.url.toString())) {
+                return PageResult.LoginRequired
+            }
+            val html = resp.body?.string().orEmpty()
+            if (LetusParsing.isNotLoggedInPage(html)) PageResult.LoginRequired
+            else PageResult.Ok(html)
         }
     } catch (_: Exception) {
-        null
+        PageResult.Failed
     }
+
+    private sealed interface PageResult {
+        data class Ok(val html: String) : PageResult
+        data object LoginRequired : PageResult
+        data object Failed : PageResult
+    }
+
+    private data class AjaxCourses(
+        val courses: List<LetusParsing.Link>? = null,
+        val loginRequired: Boolean = false,
+        val failed: Boolean = false,
+    )
+
+    private data class CourseDiscovery(
+        val courses: List<MoodleCourseEntity>,
+        val failedRequests: Int,
+        val loginRequired: Boolean,
+    )
+
+    private data class CourseFetch(
+        val course: MoodleCourseEntity,
+        val candidates: List<Candidate> = emptyList(),
+        val failed: Boolean = false,
+        val loginRequired: Boolean = false,
+    )
+
+    private data class CandidateFetch(
+        val assignment: AssignmentEntity? = null,
+        /** マージ前の今回値と前回値から求めた変更通知の文言。 */
+        val changeLabels: List<String> = emptyList(),
+        val failed: Boolean = false,
+        val loginRequired: Boolean = false,
+    )
 
     private data class Candidate(
         val id: String,

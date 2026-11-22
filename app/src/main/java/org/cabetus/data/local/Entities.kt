@@ -60,6 +60,7 @@ enum class NotificationType {
     ATTENDANCE_REMINDER,
     AUTO_ABSENT,
     FETCH_FAILURE,
+    ATTENDANCE_RISK,
 }
 
 /** アプリ内で表示する通知履歴。 */

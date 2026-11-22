@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -18,6 +17,7 @@ import org.cabetus.data.local.NotificationType
 import org.cabetus.data.local.NotifiedKeyDao
 import org.cabetus.data.local.NotifiedKeyEntity
 import org.cabetus.ui.MainActivity
+import org.cabetus.ui.browser.BrowserIntents
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,8 +48,13 @@ class NotificationHelper @Inject constructor(
     private fun smallIcon(): Int = android.R.drawable.ic_dialog_info
 
     private fun openUrlIntent(url: String, requestCode: Int): PendingIntent {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // LETUS / CLASS はアプリ内ブラウザ、それ以外は外部ブラウザへ。
+        // URL が不正な場合は課題一覧を開く。
+        val intent = BrowserIntents.createOpenIntent(context, url)
+            ?: return openAppIntent(
+                requestCode,
+                MainActivity.EXTRA_NAVIGATE to MainActivity.NAV_ASSIGNMENTS,
+            )
         return PendingIntent.getActivity(
             context, requestCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -66,38 +71,30 @@ class NotificationHelper @Inject constructor(
         )
     }
 
-    fun notifyNewAssignments(newOnes: List<AssignmentEntity>) {
-        if (!canPost() || newOnes.isEmpty()) return
-        if (newOnes.size == 1) {
-            val a = newOnes.first()
-            recordHistory(
-                NotificationType.NEW_ASSIGNMENT,
-                "新しい課題: ${a.courseName}",
-                a.title,
-                url = a.url,
-            )
-            post(
-                NotificationChannels.NEW_ASSIGNMENT,
-                id = ("new" + a.id).hashCode(),
-                title = "新しい課題: ${a.courseName}",
-                text = a.title,
-                contentIntent = openUrlIntent(a.url, ("new" + a.id).hashCode()),
-            )
-        } else {
-            val first = newOnes.first()
-            recordHistory(
-                NotificationType.NEW_ASSIGNMENT,
-                "新しい課題が${newOnes.size}件",
-                "${first.title} ほか",
-                url = null,
-            )
-            post(
-                NotificationChannels.NEW_ASSIGNMENT,
-                id = "new_multi".hashCode(),
-                title = "新しい課題が${newOnes.size}件",
-                text = "${first.title} ほか",
-                contentIntent = openAppIntent("new_multi".hashCode()),
-            )
+    fun notifyNewAssignments(newOnes: List<AssignmentEntity>, isInitialImport: Boolean = false) {
+        if (!canPost() || !nm.areNotificationsEnabled()) return
+        val presentation = NewAssignmentPresentation.build(newOnes, isInitialImport) ?: return
+        val single = presentation.assignments.singleOrNull()
+        val id = single?.let { ("new" + it.id).hashCode() } ?: "new_multi".hashCode()
+        val intent = single?.let { openUrlIntent(it.url, id) } ?: openAppIntent(
+            id, MainActivity.EXTRA_NAVIGATE to MainActivity.NAV_ASSIGNMENTS,
+        )
+        val notification = NotificationCompat.Builder(context, NotificationChannels.NEW_ASSIGNMENT)
+            .setSmallIcon(smallIcon())
+            .setContentTitle(presentation.title)
+            .setContentText(presentation.summary)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(presentation.expandedText))
+            .setNumber(presentation.assignments.size)
+            .setAutoCancel(true)
+            .setContentIntent(intent)
+            .setSilent(isInitialImport)
+            .build()
+        try {
+            nm.notify(id, notification)
+            recordHistory(NotificationType.NEW_ASSIGNMENT, presentation.title,
+                presentation.expandedText, url = single?.url)
+        } catch (_: SecurityException) {
+            // 通知権限の変更と競合した場合も取得結果は保持する。
         }
     }
 
@@ -321,6 +318,57 @@ class NotificationHelper @Inject constructor(
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openAppIntent(notifId, MainActivity.EXTRA_NAVIGATE to MainActivity.NAV_TIMETABLE))
         safeNotify(notifId, builder)
+    }
+
+    /**
+     * 欠席可能回数が少なくなった科目の警告。NotifiedKey を DB で claim して重複を抑止する。
+     * remaining は欠席可能な残り回数（負数は目標達成不可）。
+     */
+    suspend fun notifyAttendanceRisk(
+        year: Int,
+        code: String,
+        name: String,
+        remaining: Int,
+    ) {
+        if (year <= 0 || remaining > 2) return
+        if (!canPost() || !nm.areNotificationsEnabled()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            nm.getNotificationChannel(NotificationChannels.ATTENDANCE_RISK)?.importance == android.app.NotificationManager.IMPORTANCE_NONE) return
+        val bucket = when {
+            remaining >= 2 -> "2"
+            remaining == 1 -> "1"
+            remaining == 0 -> "0"
+            else -> "exceeded"
+        }
+        val key = "attendance-risk:v1:$year:$code:$bucket"
+        val claimed = notifiedKeyDao.claim(NotifiedKeyEntity(key, System.currentTimeMillis()))
+        if (claimed == -1L) return
+        val title = "欠席リスク: $name"
+        val text = if (remaining < 0) {
+            "記録済みの出欠では欠席許容回数を超え、目標達成不可です。未取得の記録は含みません。時間割や目標設定を確認してください。"
+        } else {
+            "記録済みの出欠では欠席可能はあと${remaining}回です。未取得の記録がある場合はさらに少なくなります。時間割や目標設定を確認してください。"
+        }
+        val notifId = "attendance-risk:$code".hashCode()
+        recordHistory(
+            NotificationType.ATTENDANCE_RISK,
+            title,
+            text,
+            url = null,
+        )
+        val builder = NotificationCompat.Builder(context, NotificationChannels.ATTENDANCE_RISK)
+            .setSmallIcon(smallIcon())
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(openAppIntent(notifId))
+        try {
+            nm.notify(notifId, builder.build())
+        } catch (e: Exception) {
+            notifiedKeyDao.deleteByKey(key)
+        }
     }
 
     /** 課題取得中に表示する「更新中」通知（別チャンネル・無音・常駐）。 */
