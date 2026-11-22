@@ -566,6 +566,7 @@ fun GpCalculatorScreen(
             ) {
                 // 評価レールは右に残し、狭い画面では幅と間隔だけを詰める。
                 val compactRail = maxWidth < 400.dp
+                val showRailTitle = maxHeight >= 160.dp
                 Row(
                     modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.spacedBy(if (compactRail) 8.dp else 12.dp),
@@ -625,7 +626,7 @@ fun GpCalculatorScreen(
                         modifier = Modifier.width(if (compactRail) COMPACT_RAIL_WIDTH else RAIL_WIDTH).fillMaxHeight(),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        if (maxHeight >= 160.dp) {
+                        if (showRailTitle) {
                             Text(
                                 if (compactRail) "評価" else "評価目盛り",
                                 style = MaterialTheme.typography.labelMedium,
