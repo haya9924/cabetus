@@ -60,6 +60,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.cabetus.domain.GpCalculator
@@ -167,6 +168,33 @@ private fun parseWeight(text: String): BigDecimal? {
 
 private fun formatDecimal(value: BigDecimal): String =
     value.stripTrailingZeros().toPlainString()
+
+/**
+ * 他の項目の比重から、この項目を合計100%ちょうどにする比重を求める。
+ *
+ * 空欄の比重は0%として扱う。他の比重が不正、他の合計が100%以上、
+ * 提案が入力上限を超える、または現在値と同じ数値なら提案しない。
+ * 現在値が不正でも提案を返し、明示的な操作で置き換えられるようにする。
+ */
+internal fun suggestRemainingWeight(
+    currentWeight: String,
+    otherWeights: Iterable<String>,
+): String? {
+    var othersSum = BigDecimal.ZERO
+    for (other in otherWeights) {
+        val weight = parseWeight(other) ?: return null
+        othersSum = othersSum.add(weight)
+        if (othersSum >= HUNDRED) return null
+    }
+
+    val suggestion = HUNDRED.subtract(othersSum)
+    val formatted = formatDecimal(suggestion)
+    if (formatted.length > NUMERIC_INPUT_LIMIT) return null
+
+    val current = parseWeight(currentWeight)
+    if (current != null && current.compareTo(suggestion) == 0) return null
+    return formatted
+}
 
 private fun gradeForGp(gp: Int): Grade = when (gp) {
     4 -> Grade.S
@@ -589,10 +617,18 @@ fun GpCalculatorScreen(
 
     val editingRow = rows.firstOrNull { it.id == editingId }
     if (editingRow != null) {
+        val weightSuggestion = suggestRemainingWeight(
+            currentWeight = editingRow.weight,
+            otherWeights = rows.asSequence()
+                .filter { it.id != editingRow.id }
+                .map { it.weight }
+                .asIterable(),
+        )
         ItemEditorDialog(
             item = editingRow,
             isTarget = mode == GpMode.REQUIRE && editingRow.id == effectiveTargetId,
             mode = mode,
+            weightSuggestion = weightSuggestion,
             onChange = { updated ->
                 rows = rows.map { if (it.id == updated.id) updated else it }
             },
@@ -614,6 +650,7 @@ fun GpCalculatorScreen(
 @Composable
 private fun WeightSummaryBar(weightSum: BigDecimal?) {
     val complete = weightSum?.compareTo(HUNDRED) == 0
+    val delta = weightSum?.takeUnless { complete }?.let { HUNDRED.subtract(it) }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = if (complete) {
@@ -627,21 +664,38 @@ private fun WeightSummaryBar(weightSum: BigDecimal?) {
             MaterialTheme.colorScheme.onErrorContainer
         },
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text("比重", style = MaterialTheme.typography.labelLarge)
-            Text(
-                if (weightSum == null) {
-                    "入力エラー / 100%"
-                } else {
-                    "${formatDecimal(weightSum)}% / 100%"
-                },
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("比重", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    if (weightSum == null) {
+                        "入力エラー / 100%"
+                    } else {
+                        "${formatDecimal(weightSum)}% / 100%"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            if (delta != null) {
+                Text(
+                    if (delta.signum() > 0) {
+                        "あと${formatDecimal(delta)}%"
+                    } else {
+                        "${formatDecimal(delta.abs())}%超過"
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.End,
+                )
+            }
         }
     }
 }
@@ -1052,6 +1106,7 @@ private fun ItemEditorDialog(
     item: GpItemInput,
     isTarget: Boolean,
     mode: GpMode,
+    weightSuggestion: String?,
     onChange: (GpItemInput) -> Unit,
     onDelete: (() -> Unit)?,
     onDismiss: () -> Unit,
@@ -1062,7 +1117,15 @@ private fun ItemEditorDialog(
         title = { Text(item.displayName(), maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
-                ItemEditor(item, isTarget, mode, onChange, onDelete, attendanceImport)
+                ItemEditor(
+                    item = item,
+                    isTarget = isTarget,
+                    mode = mode,
+                    weightSuggestion = weightSuggestion,
+                    onChange = onChange,
+                    onDelete = onDelete,
+                    attendanceImport = attendanceImport,
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("完了") } },
@@ -1074,6 +1137,7 @@ private fun ItemEditor(
     item: GpItemInput,
     isTarget: Boolean,
     mode: GpMode,
+    weightSuggestion: String?,
     onChange: (GpItemInput) -> Unit,
     onDelete: (() -> Unit)?,
     attendanceImport: @Composable (onApply: (present: Int, completed: Int) -> Unit) -> Unit,
@@ -1122,6 +1186,15 @@ private fun ItemEditor(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
+
+        if (weightSuggestion != null) {
+            TextButton(
+                onClick = { onChange(item.copy(weight = weightSuggestion)) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("残りの比重を入力（${weightSuggestion}%）", textAlign = TextAlign.Center)
+            }
+        }
 
         if (item.isAttendance) {
             AttendanceFields(
