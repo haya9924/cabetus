@@ -82,6 +82,6 @@ jobs:
             adb install apks/debug/app-debug.apk
             adb install -t apks/androidTest/app-debug-androidTest.apk
             # The fixture uses a plain Application; keep Hilt's real boot receiver out of this disposable emulator test.
-            adb shell pm disable --user 0 org.cabetus.debug/org.cabetus.notification.BootReceiver
+            adb root && adb wait-for-device && adb shell pm disable --user 0 org.cabetus.debug/org.cabetus.notification.BootReceiver
             adb shell am instrument -w -r -e suite schedule-notices org.cabetus.debug.test/org.cabetus.AttendanceIntegrationInstrumentation | tee "$RUNNER_TEMP/class-schedule-device.log"
             grep -F 'INSTRUMENTATION_RESULT: schedule_notices=PASS' "$RUNNER_TEMP/class-schedule-device.log" || { adb logcat -b crash -d; exit 1; }
