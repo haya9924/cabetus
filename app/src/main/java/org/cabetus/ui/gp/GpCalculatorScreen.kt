@@ -1,11 +1,13 @@
 package org.cabetus.ui.gp
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -23,10 +25,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -47,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,12 +63,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import org.cabetus.domain.GpCalculator
 import org.cabetus.domain.GpCalculator.Grade
 import java.math.BigDecimal
@@ -69,6 +80,8 @@ import java.math.BigDecimal
 private val HUNDRED: BigDecimal = BigDecimal.valueOf(100)
 private const val DEFAULT_TARGET_GP = 2
 private const val DEFAULT_MAX = "100"
+private val RAIL_WIDTH = 68.dp
+private val COMPACT_RAIL_WIDTH = 52.dp
 private val TARGET_GPS = listOf(4, 3, 2, 1)
 private const val NUMERIC_INPUT_LIMIT = 16
 private val DECIMAL_INPUT = Regex("-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)")
@@ -167,6 +180,33 @@ private fun parseWeight(text: String): BigDecimal? {
 
 private fun formatDecimal(value: BigDecimal): String =
     value.stripTrailingZeros().toPlainString()
+
+/**
+ * 他の項目の比重から、この項目を合計100%ちょうどにする比重を求める。
+ *
+ * 空欄の比重は0%として扱う。他の比重が不正、他の合計が100%以上、
+ * 提案が入力上限を超える、または現在値と同じ数値なら提案しない。
+ * 現在値が不正でも提案を返し、明示的な操作で置き換えられるようにする。
+ */
+internal fun suggestRemainingWeight(
+    currentWeight: String,
+    otherWeights: Iterable<String>,
+): String? {
+    var othersSum = BigDecimal.ZERO
+    for (other in otherWeights) {
+        val weight = parseWeight(other) ?: return null
+        othersSum = othersSum.add(weight)
+        if (othersSum >= HUNDRED) return null
+    }
+
+    val suggestion = HUNDRED.subtract(othersSum)
+    val formatted = formatDecimal(suggestion)
+    if (formatted.length > NUMERIC_INPUT_LIMIT) return null
+
+    val current = parseWeight(currentWeight)
+    if (current != null && current.compareTo(suggestion) == 0) return null
+    return formatted
+}
 
 private fun gradeForGp(gp: Int): Grade = when (gp) {
     4 -> Grade.S
@@ -445,6 +485,8 @@ fun GpCalculatorScreen(
     }
     val goalGrade = gradeForGp(targetGp)
     val targetIndex = rows.indexOfFirst { it.id == effectiveTargetId }
+    val contentScroll = rememberScrollState()
+    val scrollScope = rememberCoroutineScope()
 
     val outcome = remember(rows, mode, effectiveTargetId) {
         buildOutcome(rows, mode, effectiveTargetId)
@@ -507,81 +549,98 @@ fun GpCalculatorScreen(
         ) {
             ModeSelector(
                 mode = mode,
-                onModeChange = { modeName = it.name },
+                onModeChange = { next ->
+                    // 明示的に逆算へ切り替えたときだけ先頭へ戻す（入力変更では動かさない）。
+                    if (next == GpMode.REQUIRE && mode != GpMode.REQUIRE) {
+                        scrollScope.launch { contentScroll.scrollTo(0) }
+                    }
+                    modeName = next.name
+                },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
 
-            Row(
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(start = 16.dp, end = 12.dp, bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Column(
-                    modifier = Modifier
-                        .weight(2f)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                // 評価レールは右に残し、狭い画面では幅と間隔だけを詰める。
+                val compactRail = maxWidth < 400.dp
+                val showRailTitle = maxHeight >= 160.dp
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(if (compactRail) 8.dp else 12.dp),
                 ) {
-                    ItemList(
-                        rows = rows,
-                        mode = mode,
-                        targetId = effectiveTargetId,
-                        onEdit = { editingId = it },
-                        onAdd = {
-                            val id = nextId
-                            nextId = nextId + 1L
-                            rows = rows + GpItemInput(
-                                id = id,
-                                name = "追加項目",
-                                weight = "",
-                                score = "",
-                                max = DEFAULT_MAX,
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .verticalScroll(contentScroll),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        if (mode == GpMode.REQUIRE) {
+                            RequirementSettings(
+                                targetOptions = targetOptions,
+                                selectedId = effectiveTargetId,
+                                targetGp = targetGp,
+                                onSelectTarget = { targetId = it },
+                                onSelectGp = { targetGp = it },
                             )
-                            editingId = id
-                        },
-                    )
+                        }
 
-                    if (mode == GpMode.REQUIRE) {
-                        RequirementSettingsCard(
-                            targetOptions = targetOptions,
-                            selectedId = effectiveTargetId,
+                        ResultCard(
+                            mode = mode,
+                            prediction = prediction,
+                            requirement = requirement,
                             targetGp = targetGp,
-                            onSelectTarget = { targetId = it },
-                            onSelectGp = { targetGp = it },
+                            targetMax = targetMax,
+                        )
+
+                        if (issues.isNotEmpty()) {
+                            IssuesCard(issues)
+                        }
+
+                        ItemList(
+                            rows = rows,
+                            mode = mode,
+                            targetId = effectiveTargetId,
+                            onEdit = { editingId = it },
+                            onAdd = {
+                                val id = nextId
+                                nextId = nextId + 1L
+                                rows = rows + GpItemInput(
+                                    id = id,
+                                    name = "追加項目",
+                                    weight = "",
+                                    score = "",
+                                    max = DEFAULT_MAX,
+                                )
+                                editingId = id
+                            },
+                        )
+
+                        NotesCard()
+                    }
+
+                    Column(
+                        modifier = Modifier.width(if (compactRail) COMPACT_RAIL_WIDTH else RAIL_WIDTH).fillMaxHeight(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        if (showRailTitle) {
+                            Text(
+                                if (compactRail) "評価" else "評価目盛り",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        GradeRail(
+                            prediction = prediction,
+                            compact = compactRail,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
                         )
                     }
-
-                    ResultCard(
-                        mode = mode,
-                        prediction = prediction,
-                        requirement = requirement,
-                        targetGp = targetGp,
-                        targetName = targetRow?.displayName() ?: "対象項目",
-                        targetMax = targetMax,
-                    )
-
-                    if (issues.isNotEmpty()) {
-                        IssuesCard(issues)
-                    }
-
-                    NotesCard()
-                }
-
-                Column(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        prediction?.let { "${formatDecimal(it.score)}点 · GP ${it.grade.gp}" } ?: "評価目盛り",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    GradeRail(
-                        prediction = prediction,
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                    )
                 }
             }
         }
@@ -589,10 +648,18 @@ fun GpCalculatorScreen(
 
     val editingRow = rows.firstOrNull { it.id == editingId }
     if (editingRow != null) {
+        val weightSuggestion = suggestRemainingWeight(
+            currentWeight = editingRow.weight,
+            otherWeights = rows.asSequence()
+                .filter { it.id != editingRow.id }
+                .map { it.weight }
+                .asIterable(),
+        )
         ItemEditorDialog(
             item = editingRow,
             isTarget = mode == GpMode.REQUIRE && editingRow.id == effectiveTargetId,
             mode = mode,
+            weightSuggestion = weightSuggestion,
             onChange = { updated ->
                 rows = rows.map { if (it.id == updated.id) updated else it }
             },
@@ -614,6 +681,7 @@ fun GpCalculatorScreen(
 @Composable
 private fun WeightSummaryBar(weightSum: BigDecimal?) {
     val complete = weightSum?.compareTo(HUNDRED) == 0
+    val delta = weightSum?.takeUnless { complete }?.let { HUNDRED.subtract(it) }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = if (complete) {
@@ -627,21 +695,38 @@ private fun WeightSummaryBar(weightSum: BigDecimal?) {
             MaterialTheme.colorScheme.onErrorContainer
         },
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text("比重", style = MaterialTheme.typography.labelLarge)
-            Text(
-                if (weightSum == null) {
-                    "入力エラー / 100%"
-                } else {
-                    "${formatDecimal(weightSum)}% / 100%"
-                },
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("比重", style = MaterialTheme.typography.labelLarge)
+                Text(
+                    if (weightSum == null) {
+                        "入力エラー / 100%"
+                    } else {
+                        "${formatDecimal(weightSum)}% / 100%"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            if (delta != null) {
+                Text(
+                    if (delta.signum() > 0) {
+                        "あと${formatDecimal(delta)}%"
+                    } else {
+                        "${formatDecimal(delta.abs())}%超過"
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.End,
+                )
+            }
         }
     }
 }
@@ -665,6 +750,7 @@ private fun gradeRailFraction(score: BigDecimal?): Float? {
 @Composable
 private fun GradeRail(
     prediction: GpCalculator.Prediction?,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val fraction = gradeRailFraction(prediction?.score)
@@ -683,37 +769,33 @@ private fun GradeRail(
         val minimumHeight = with(LocalDensity.current) {
             MaterialTheme.typography.labelMedium.lineHeight.toDp() * 6
         }
-        if (maxHeight < minimumHeight) {
-            Text(
-                prediction?.grade?.name ?: "S–D",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (prediction == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-            )
-        } else {
-            val inset = maxHeight / 12f
-            Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.width(24.dp).fillMaxHeight().padding(vertical = inset)
-                        .clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
-                ) {
-                    if (fraction != null && fraction > 0f) {
-                        Box(
-                            Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(fraction)
-                                .background(MaterialTheme.colorScheme.error),
-                        )
-                    }
+        val showLabels = maxHeight >= minimumHeight
+        val inset = maxHeight / 12f
+        Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.width(if (compact) 16.dp else 24.dp).fillMaxHeight().padding(vertical = inset)
+                    .clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+            ) {
+                if (fraction != null && fraction > 0f) {
+                    Box(
+                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(fraction)
+                            .background(MaterialTheme.colorScheme.error),
+                    )
                 }
-                Column(Modifier.fillMaxHeight().padding(start = 5.dp)) {
-                    // 目盛りは各行の中央。先頭の空行はSの上（100点）を確保する。
-                    Spacer(Modifier.weight(1f))
-                    Grade.entries.forEach { grade ->
-                        val current = prediction?.grade == grade
-                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                            HorizontalDivider(Modifier.width(8.dp), color = MaterialTheme.colorScheme.outline)
+            }
+            Column(Modifier.fillMaxHeight().padding(start = 4.dp)) {
+                // 短い画面でも棒と目盛りを残し、ラベルだけ省く。
+                Spacer(Modifier.weight(1f))
+                Grade.entries.forEach { grade ->
+                    val current = prediction?.grade == grade
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        HorizontalDivider(Modifier.width(if (compact) 5.dp else 8.dp), color = MaterialTheme.colorScheme.outline)
+                        if (showLabels) {
                             Text(
                                 grade.name,
-                                modifier = Modifier.padding(start = 5.dp),
+                                modifier = Modifier.padding(start = 3.dp),
                                 style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
                                 fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
                                 color = if (current) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -725,92 +807,179 @@ private fun GradeRail(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ModeSelector(
     mode: GpMode,
     onModeChange: (GpMode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("計算方法", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = mode == GpMode.PREDICT,
-                onClick = { onModeChange(GpMode.PREDICT) },
-                label = { Text("予想GP") },
-            )
-            FilterChip(
-                selected = mode == GpMode.REQUIRE,
-                onClick = { onModeChange(GpMode.REQUIRE) },
-                label = { Text("目標から逆算") },
-            )
-        }
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        FilterChip(
+            selected = mode == GpMode.PREDICT,
+            onClick = { onModeChange(GpMode.PREDICT) },
+            label = { Text("予想GP") },
+        )
+        FilterChip(
+            selected = mode == GpMode.REQUIRE,
+            onClick = { onModeChange(GpMode.REQUIRE) },
+            label = { Text("目標から逆算") },
+        )
     }
 }
 
+/**
+ * 逆算の条件。項目と目標GPを、横幅と文字サイズに合わせて2列または縦1列に並べる。
+ * 横スクロールは使わない。
+ */
 @Composable
-private fun RequirementSettingsCard(
+private fun RequirementSettings(
     targetOptions: List<TargetOption>,
     selectedId: Long,
     targetGp: Int,
     onSelectTarget: (Long) -> Unit,
     onSelectGp: (Int) -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text("逆算の条件", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "正の比重の項目を1つ選び、目標GPを指定します。" +
-                    "他の項目の得点・出席見込みは入力値のまま固定して計算します。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    val selectedTarget = targetOptions.firstOrNull { it.id == selectedId }
+        ?: targetOptions.firstOrNull()
 
-            Text("逆算する項目", style = MaterialTheme.typography.labelLarge)
-            if (targetOptions.isEmpty()) {
-                Text(
-                    "比重が0%より大きい項目がありません。入力カードで比重を設定してください。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    targetOptions.forEach { option ->
-                        FilterChip(
-                            selected = option.id == selectedId,
-                            onClick = { onSelectTarget(option.id) },
-                            label = {
-                                Text("${option.name} ${formatDecimal(option.weight)}%")
-                            },
-                        )
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val targetSelector: @Composable (Modifier) -> Unit = { modifier ->
+                    SelectorField(
+                        label = "逆算する項目",
+                        value = selectedTarget?.name ?: "比重を入力",
+                        enabled = selectedTarget != null,
+                        modifier = modifier,
+                    ) { dismiss ->
+                        targetOptions.forEach { option ->
+                            key(option.id) {
+                                val selected = option.id == selectedTarget?.id
+                                DropdownMenuItem(
+                                    modifier = Modifier.semantics { this.selected = selected },
+                                    trailingIcon = if (selected) {
+                                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                                    } else null,
+                                    text = {
+                                        Text(
+                                            "${option.name}（${formatDecimal(option.weight)}%）",
+                                        )
+                                    },
+                                    onClick = {
+                                        onSelectTarget(option.id)
+                                        dismiss()
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                val gpSelector: @Composable (Modifier) -> Unit = { modifier ->
+                    SelectorField(
+                        label = "目標GP",
+                        value = "GP$targetGp（${gradeForGp(targetGp).name}）",
+                        enabled = true,
+                        modifier = modifier,
+                    ) { dismiss ->
+                        TARGET_GPS.forEach { gp ->
+                            key(gp) {
+                                val selected = gp == targetGp
+                                DropdownMenuItem(
+                                    modifier = Modifier.semantics { this.selected = selected },
+                                    trailingIcon = if (selected) {
+                                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                                    } else null,
+                                    text = { Text("GP$gp（${gradeForGp(gp).name}）") },
+                                    onClick = {
+                                        onSelectGp(gp)
+                                        dismiss()
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (maxWidth >= 244.dp * LocalDensity.current.fontScale.coerceAtLeast(1f)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        targetSelector(Modifier.weight(1f))
+                        gpSelector(Modifier.weight(1f))
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        targetSelector(Modifier.fillMaxWidth())
+                        gpSelector(Modifier.fillMaxWidth())
                     }
                 }
             }
+        }
+    }
+}
 
-            Text("目標GP", style = MaterialTheme.typography.labelLarge)
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+/** ラベル・現在値・展開アイコンを持つ、横スクロールなしの選択欄。 */
+@Composable
+private fun SelectorField(
+    label: String,
+    value: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    menu: @Composable (dismiss: () -> Unit) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(enabled = enabled, role = Role.Button, onClickLabel = "${label}を選ぶ") {
+                        expanded = true
+                    },
+                shape = MaterialTheme.shapes.small,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.surfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                },
+                contentColor = if (enabled) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                },
             ) {
-                TARGET_GPS.forEach { gp ->
-                    FilterChip(
-                        selected = gp == targetGp,
-                        onClick = { onSelectGp(gp) },
-                        label = { Text("GP$gp（${gradeForGp(gp).name}）") },
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp).heightIn(min = 48.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        value,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    if (enabled) {
+                        Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                    }
                 }
             }
-            Text(
-                "GP4=S、GP3=A、GP2=B、GP1=C として計算します。Dは逆算の対象外です。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                menu { expanded = false }
+            }
         }
     }
 }
@@ -837,7 +1006,6 @@ private fun ResultCard(
     prediction: GpCalculator.Prediction?,
     requirement: GpCalculator.Requirement?,
     targetGp: Int,
-    targetName: String,
     targetMax: BigDecimal?,
 ) {
     val impossible = requirement == GpCalculator.Requirement.Impossible
@@ -858,38 +1026,21 @@ private fun ResultCard(
         ),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            if (mode == GpMode.REQUIRE) {
                 Text(
-                    if (mode == GpMode.PREDICT) "予想結果" else "逆算結果",
-                    style = MaterialTheme.typography.labelLarge,
-                )
-                Text(
-                    when {
-                        mode == GpMode.PREDICT && prediction != null ->
-                            "評価 ${prediction.grade.name}"
-
-                        mode == GpMode.REQUIRE ->
-                            "GP$targetGp（${gradeForGp(targetGp).name}）"
-
-                        else -> "GP計算"
-                    },
+                    "逆算結果 · GP$targetGp（${gradeForGp(targetGp).name}）",
                     style = MaterialTheme.typography.labelLarge,
                 )
             }
 
             when {
-                mode == GpMode.PREDICT && prediction != null -> {
-                    Text("予想GP", style = MaterialTheme.typography.labelMedium)
+                prediction != null -> {
                     Text(
-                        "${prediction.grade.gp}.0",
-                        style = MaterialTheme.typography.displayMedium,
+                        "予想GP ${prediction.grade.gp}.0（評価 ${prediction.grade.name}）",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
@@ -900,66 +1051,53 @@ private fun ResultCard(
 
                 mode == GpMode.PREDICT -> {
                     Text(
-                        "入力が完了すると予想GPを表示します。",
+                        "予想GPは入力完了後に表示します。",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        "下の入力カードで比重と、出席なら今後出席見込みまで入力してください。",
+                        "比重と、出席なら今後出席見込みまで入力してください。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
 
                 requirement is GpCalculator.Requirement.Points -> {
-                    Text("必要得点", style = MaterialTheme.typography.labelMedium)
                     Text(
-                        "${formatDecimal(requirement.points)}点",
-                        style = MaterialTheme.typography.displaySmall,
+                        buildString {
+                            append("必要得点 ${formatDecimal(requirement.points)}点")
+                            if (targetMax != null) {
+                                append(" / ${formatDecimal(targetMax)}点")
+                            }
+                        },
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
-                    Text(
-                        "「$targetName」で GP$targetGp（${gradeForGp(targetGp).name}）に必要な得点",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (targetMax != null) {
-                        Text(
-                            "満点 ${formatDecimal(targetMax)}点",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
                 }
 
                 requirement is GpCalculator.Requirement.Attend -> {
-                    Text("必要な追加出席", style = MaterialTheme.typography.labelMedium)
                     Text(
-                        if (requirement.additional == 0) {
-                            "あと0回（追加不要）"
-                        } else {
-                            "あと${requirement.additional}回"
+                        buildString {
+                            append("必要な追加出席 ")
+                            if (requirement.additional == 0) {
+                                append("0回（追加不要）")
+                            } else {
+                                append("${requirement.additional}回")
+                            }
+                            append(" / 残り${requirement.remaining}回")
                         },
-                        style = MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        "残り${requirement.remaining}回",
                         style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        "「$targetName」で GP$targetGp（${gradeForGp(targetGp).name}）に必要な出席。" +
-                            "対象の出席見込みは使わず、残り回数で判定します。",
-                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
                     )
                 }
 
                 impossible -> {
                     Text(
                         "達成できません",
-                        style = MaterialTheme.typography.displaySmall,
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        "「$targetName」で GP$targetGp（${gradeForGp(targetGp).name}）に必要な値が、" +
-                            "満点または残り回数を超えています。比重や他の項目を見直してください。",
-                        style = MaterialTheme.typography.bodyMedium,
+                        "必要値が満点または残り回数を超えています。比重や他の項目を見直してください。",
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
 
@@ -980,6 +1118,7 @@ private fun ResultCard(
 
 @Composable
 private fun IssuesCard(issues: List<String>) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -988,12 +1127,16 @@ private fun IssuesCard(issues: List<String>) {
         ),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("入力を確認してください", style = MaterialTheme.typography.titleSmall)
-            issues.forEach { issue ->
-                Text("・$issue", style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "入力の問題を閉じる" else "入力の問題を表示（${issues.size}件）")
+            }
+            if (expanded) {
+                issues.forEach { issue ->
+                    Text("・$issue", style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
     }
@@ -1008,34 +1151,31 @@ private fun ItemList(
     onAdd: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        rows.forEach { item ->
-            key(item.id) {
-                val weight = parseWeight(item.weight)
-                val isTarget = mode == GpMode.REQUIRE && item.id == targetId
-                OutlinedCard(onClick = { onEdit(item.id) }, modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                Modifier.size(10.dp).clip(RoundedCornerShape(3.dp))
-                                    .background(if (isTarget) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary),
-                            )
-                            Text(item.displayName(), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        }
-                        Text(
-                            weight?.let { "${formatDecimal(it)}%" } ?: "比重エラー",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = if (weight == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "評価項目",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "比重",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                rows.forEach { item ->
+                    key(item.id) {
+                        HorizontalDivider()
+                        ItemListRow(
+                            item = item,
+                            isTarget = mode == GpMode.REQUIRE && item.id == targetId,
+                            onClick = { onEdit(item.id) },
                         )
-                        val detail = when {
-                            isTarget -> "逆算の対象"
-                            item.isAttendance && item.total.isNotBlank() -> "出席 ${item.present} / ${item.total}回"
-                            !item.isAttendance && item.score.isNotBlank() -> "得点 ${item.score} / ${item.max}点"
-                            else -> "タップして入力"
-                        }
-                        Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -1048,10 +1188,86 @@ private fun ItemList(
 }
 
 @Composable
+private fun ItemListRow(
+    item: GpItemInput,
+    isTarget: Boolean,
+    onClick: () -> Unit,
+) {
+    val weight = parseWeight(item.weight)
+    val weightText = weight?.let { "${formatDecimal(it)}%" } ?: "比重エラー"
+    val weightColor = if (weight == null) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val detail = when {
+        isTarget -> "逆算の対象"
+        item.isAttendance && item.total.isNotBlank() -> "出席 ${item.present} / ${item.total}回"
+        !item.isAttendance && item.score.isNotBlank() -> "得点 ${item.score} / ${item.max}点"
+        else -> null
+    }
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(onClickLabel = "編集", role = Role.Button, onClick = onClick),
+    ) {
+        val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+        val label: @Composable (Modifier) -> Unit = { modifier ->
+            Row(
+                modifier = modifier,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(10.dp).clip(RoundedCornerShape(3.dp))
+                        .background(
+                            if (isTarget) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                        ),
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(item.displayName(), style = MaterialTheme.typography.titleSmall)
+                    if (detail != null) {
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        // 狭い画面や大きな文字では、項目名と比重を縦に積んで切れないようにする。
+        if (maxWidth >= 220.dp * fontScale) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                label(Modifier.weight(1f))
+                Text(weightText, style = MaterialTheme.typography.titleSmall, color = weightColor)
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                label(Modifier.fillMaxWidth())
+                Text(weightText, style = MaterialTheme.typography.titleSmall, color = weightColor)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ItemEditorDialog(
     item: GpItemInput,
     isTarget: Boolean,
     mode: GpMode,
+    weightSuggestion: String?,
     onChange: (GpItemInput) -> Unit,
     onDelete: (() -> Unit)?,
     onDismiss: () -> Unit,
@@ -1062,7 +1278,15 @@ private fun ItemEditorDialog(
         title = { Text(item.displayName(), maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())) {
-                ItemEditor(item, isTarget, mode, onChange, onDelete, attendanceImport)
+                ItemEditor(
+                    item = item,
+                    isTarget = isTarget,
+                    mode = mode,
+                    weightSuggestion = weightSuggestion,
+                    onChange = onChange,
+                    onDelete = onDelete,
+                    attendanceImport = attendanceImport,
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("完了") } },
@@ -1074,6 +1298,7 @@ private fun ItemEditor(
     item: GpItemInput,
     isTarget: Boolean,
     mode: GpMode,
+    weightSuggestion: String?,
     onChange: (GpItemInput) -> Unit,
     onDelete: (() -> Unit)?,
     attendanceImport: @Composable (onApply: (present: Int, completed: Int) -> Unit) -> Unit,
@@ -1122,6 +1347,15 @@ private fun ItemEditor(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
+
+        if (weightSuggestion != null) {
+            TextButton(
+                onClick = { onChange(item.copy(weight = weightSuggestion)) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("残りの比重を入力（${weightSuggestion}%）", textAlign = TextAlign.Center)
+            }
+        }
 
         if (item.isAttendance) {
             AttendanceFields(
@@ -1299,6 +1533,7 @@ private fun InfoLine(text: String) {
 
 @Composable
 private fun NotesCard() {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -1307,30 +1542,45 @@ private fun NotesCard() {
         ),
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("この試算について", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "・科目独自の合格条件（出席回数の下限、課題ごとの必須条件など）は反映しません。",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "・遅刻・早退・公欠の扱いは、科目や教員の基準と異なる場合があります。",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "・GPの閾値は S=90、A=80、B=70、C=60、D=0 として計算します。",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "・総合点の表示は小数第2位まで。必要得点は1点単位で切り上げます（小数の満点を超える場合は満点まで）。",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "・入力内容に基づく試算です。正式な評価はシラバスや授業の案内を確認してください。",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "この試算について",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { expanded = !expanded }) {
+                    Text(if (expanded) "注意事項を閉じる" else "注意事項を表示")
+                }
+            }
+            if (expanded) {
+                Text(
+                    "・科目独自の合格条件（出席回数の下限、課題ごとの必須条件など）は反映しません。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "・遅刻・早退・公欠の扱いは、科目や教員の基準と異なる場合があります。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "・GPの閾値は S=90、A=80、B=70、C=60、D=0 として計算します。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "・総合点の表示は小数第2位まで。必要得点は1点単位で切り上げます（小数の満点を超える場合は満点まで）。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "・入力内容に基づく試算です。正式な評価はシラバスや授業の案内を確認してください。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }
