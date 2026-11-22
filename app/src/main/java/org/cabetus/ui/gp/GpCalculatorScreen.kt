@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -64,6 +65,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -852,21 +854,22 @@ private fun RequirementSettings(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("逆算の条件", style = MaterialTheme.typography.titleSmall)
-
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val targetSelector: @Composable (Modifier) -> Unit = { modifier ->
                     SelectorField(
                         label = "逆算する項目",
-                        value = selectedTarget?.let {
-                            "${it.name}（${formatDecimal(it.weight)}%）"
-                        } ?: "比重を入力",
+                        value = selectedTarget?.name ?: "比重を入力",
                         enabled = selectedTarget != null,
                         modifier = modifier,
                     ) { dismiss ->
                         targetOptions.forEach { option ->
                             key(option.id) {
+                                val selected = option.id == selectedTarget?.id
                                 DropdownMenuItem(
+                                    modifier = Modifier.semantics { this.selected = selected },
+                                    trailingIcon = if (selected) {
+                                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                                    } else null,
                                     text = {
                                         Text(
                                             "${option.name}（${formatDecimal(option.weight)}%）",
@@ -890,7 +893,12 @@ private fun RequirementSettings(
                     ) { dismiss ->
                         TARGET_GPS.forEach { gp ->
                             key(gp) {
+                                val selected = gp == targetGp
                                 DropdownMenuItem(
+                                    modifier = Modifier.semantics { this.selected = selected },
+                                    trailingIcon = if (selected) {
+                                        { Icon(Icons.Filled.Check, contentDescription = null) }
+                                    } else null,
                                     text = { Text("GP$gp（${gradeForGp(gp).name}）") },
                                     onClick = {
                                         onSelectGp(gp)
@@ -1124,19 +1132,8 @@ private fun IssuesCard(issues: List<String>) {
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "入力を確認してください（${issues.size}件）",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(if (expanded) "問題を閉じる" else "問題を表示")
-                }
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "入力の問題を閉じる" else "入力の問題を表示（${issues.size}件）")
             }
             if (expanded) {
                 issues.forEach { issue ->
