@@ -1,6 +1,7 @@
 package org.cabetus.domain
 
 import org.cabetus.data.classweb.ConfirmedAttendanceRecord
+import org.cabetus.data.classweb.MobileAttendancePageCourse
 import org.cabetus.data.classweb.MobileAttendanceSnapshot
 import org.cabetus.data.classweb.PendingAttendanceRecord
 import org.cabetus.data.network.NetworkTransport
@@ -121,6 +122,14 @@ object MobileAttendanceEvidence {
     }
 
     /**
+     * 画面の授業ブロック 1 件分の出席表示。科目名は CLASS の画面に出ていたものをそのまま持つ。
+     */
+    data class PageCourseDisplay(
+        val courseName: String,
+        val attendance: Display,
+    )
+
+    /**
      * 対象のコマ（[dayOfWeek]・[period]・[courseCode]）について、キャッシュを評価する。
      *
      * [now] は日本時間（Asia/Tokyo）のローカル時刻として渡す（タイムゾーン変換はしない）。
@@ -141,84 +150,14 @@ object MobileAttendanceEvidence {
     ): Display {
         if (snapshot == null) return Display(status = Status.NONE)
 
-        val capturedAt = runCatching {
-            LocalDateTime.ofInstant(
-                java.time.Instant.ofEpochMilli(snapshot.capturedAtEpochMs),
-                ZONE,
-            )
-        }.getOrNull()
-        if (capturedAt == null) {
-            return Display(
-                status = Status.STALE,
-                reason = "読み取り時刻を確認できないため失効しています。" +
-                    "出席状況を確認するには CLASS のモバイル出席登録を開いてください。",
-                campusNetworkLabelVisible = false,
-            )
-        }
-        val rawAgeSeconds = Duration.between(capturedAt, now).seconds
-        val ageSeconds = rawAgeSeconds.coerceAtLeast(0L)
-        val transport = snapshot.transport?.let { name ->
-            NetworkTransport.entries.firstOrNull { it.name == name }
-        }
-        val dateLabel = snapshot.displayDateLabel()
-
-        val base = Display(
-            status = Status.STALE,
-            capturedAt = capturedAt,
-            ageSeconds = ageSeconds,
-            transport = transport,
-            dateLabel = dateLabel,
-            campusNetworkLabelVisible = snapshot.campusNetworkLabelVisible,
+        val (base, targetDate) = guardFreshness(
+            snapshot = snapshot,
+            now = now,
+            currentTransport = currentTransport,
+            currentNetworkKnown = currentNetworkKnown,
+            loginState = loginState,
         )
-
-        // 端末の時計が読み取り時刻より前に戻っている場合は、経過時間を信用せず失効させる。
-        if (rawAgeSeconds < 0L) {
-            return base.copy(
-                reason = "端末の時計が読み取り時刻より前になっているため、読み取り結果を使いません。" +
-                    "出席状況を確認するには CLASS のモバイル出席登録を開いてください。",
-            )
-        }
-        // 経過時間。[MAX_AGE] 以上で失効（ちょうど MAX_AGE も失効させる）。
-        if (ageSeconds >= MAX_AGE.seconds) {
-            return base.copy(
-                reason = "${formatAge(ageSeconds)}前の読み取りのため失効しています。" +
-                    "出席状況を確認するには CLASS のモバイル出席登録を開いてください。",
-            )
-        }
-        // 日付。年が画面に無い場合は月日だけで比較する（キャッシュ側の年は推測しない）。
-        if (!snapshot.matchesDate(now.toLocalDate())) {
-            return base.copy(
-                reason = "読み取った日付（${dateLabel ?: "不明"}）が今日ではないため失効しています。",
-            )
-        }
-        // 読み取り時のネットワーク状態。
-        if (!snapshot.networkKnown || snapshot.transport == null) {
-            return base.copy(
-                reason = "読み取り時のネットワーク状態を確認できないため失効しています。",
-            )
-        }
-        if (!currentNetworkKnown || currentTransport == null) {
-            return base.copy(
-                reason = "現在のネットワーク状態を確認できないため失効しています。",
-            )
-        }
-        if (transport != currentTransport) {
-            return base.copy(
-                reason = "読み取り時（${transportLabel(transport)}）と現在" +
-                    "（${transportLabel(currentTransport)}）のネットワークが異なるため失効しています。",
-            )
-        }
-        // ログイン切れが確認できている場合は、古い読み取り結果を使わない。
-        if (loginState == LoginState.LOGGED_OUT) {
-            return base.copy(
-                reason = "ログイン切れが確認されているため、以前の読み取り結果を使いません。" +
-                    "CLASS にログインし直してから出席状況を確認してください。",
-            )
-        }
-        val targetDate = now.toLocalDate()
-        if (!snapshot.matchesDate(targetDate)) {
-            return base.copy(reason = "読み取った日付と今日が一致しないため失効しています。")
-        }
+        if (targetDate == null) return base
 
         val confirmed = snapshot.confirmed.firstOrNull { record ->
             record.matches(dayOfWeek, period, courseCode, targetDate)
@@ -291,6 +230,47 @@ object MobileAttendanceEvidence {
             status = Status.NOT_APPLICABLE,
             reason = "この授業の出席表示は読み取れていません。",
         )
+    }
+
+    /**
+     * 画面に写した授業ブロック（[MobileAttendanceSnapshot.pageCourses]）を、表示順のまま評価する。
+     *
+     * 時間割の「実施中授業」に依存せず、CLASS の画面に出ていた授業名をそのまま返す。
+     * キャッシュが古い・日付が違う・時計の巻き戻し・ネットワーク不明/不一致・ログイン切れの
+     * 場合は、どの行も返さない（古い情報を現在の出席として見せない）。
+     * 同じ行に「出席」が明示されていれば [Status.CONFIRMED]、「出席確認中」と有効な受付時間が
+     * あれば受付開始前 [Status.BEFORE_START]・受付中 [Status.PENDING]・受付終了
+     * [Status.EXPIRED] を出す。受付中以外はカウントダウンを出さない。
+     * 有効な受付時間が無い行（次の授業など、状態が明示されていない行を含む）も
+     * 授業名は残し、出席状態は [Status.NOT_APPLICABLE]（状況未確認）とする。
+     */
+    fun evaluatePage(
+        snapshot: MobileAttendanceSnapshot?,
+        now: LocalDateTime,
+        currentTransport: NetworkTransport?,
+        currentNetworkKnown: Boolean,
+        loginState: LoginState = LoginState.UNKNOWN,
+    ): List<PageCourseDisplay> {
+        if (snapshot == null) return emptyList()
+
+        val (base, targetDate) = guardFreshness(
+            snapshot = snapshot,
+            now = now,
+            currentTransport = currentTransport,
+            currentNetworkKnown = currentNetworkKnown,
+            loginState = loginState,
+        )
+        if (targetDate == null) return emptyList()
+        if (snapshot.weekdayLabel?.let { it != dayOfWeekLabel(targetDate.dayOfWeek.value) } == true) {
+            return emptyList()
+        }
+
+        return snapshot.pageCourses.map { course ->
+            PageCourseDisplay(
+                courseName = course.courseName,
+                attendance = evaluatePageCourse(course, base, now, targetDate),
+            )
+        }
     }
 
     /**
@@ -400,12 +380,171 @@ object MobileAttendanceEvidence {
 
     /** 出席確認の締切表示に関する説明。 */
     const val PENDING_NOTE: String =
-        "受付中の表示は、CLASS のモバイル出席登録に「出席確認中」と受付時間が表示され、" +
-            "科目・日付・時限を時間割と確実に紐付けられた場合だけ行います。" +
+        "受付中の表示は、CLASS のモバイル出席登録の同じ授業の行に「出席確認中」と受付時間が" +
+            "表示されている場合だけ行います。" +
             "受付中は提出状況が未確認という意味で、未提出と断定はしません。" +
             "「出席」の表示を確認できた場合は「出席完了」に切り替えます。" +
             "読み取りが古い・日付やネットワークが変わった・ログイン切れ・受付開始前・受付時間を過ぎた場合は" +
             "「状況未確認」と表示し、出席状況を推測しません。"
+
+    /**
+     * キャッシュの新しさ・日付・ネットワーク・ログイン状態を確認する。
+     *
+     * 返す [Display] は失効時の理由を含む「元の表示」で、対象日付が null なら失効している
+     * （呼び出し側は行を出さない）。時間割に紐付いたレコードと画面の授業ブロックの評価で共通に使う。
+     */
+    private fun guardFreshness(
+        snapshot: MobileAttendanceSnapshot,
+        now: LocalDateTime,
+        currentTransport: NetworkTransport?,
+        currentNetworkKnown: Boolean,
+        loginState: LoginState,
+    ): Pair<Display, LocalDate?> {
+        val capturedAt = runCatching {
+            LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(snapshot.capturedAtEpochMs),
+                ZONE,
+            )
+        }.getOrNull()
+        if (capturedAt == null) {
+            return Pair(
+                Display(
+                    status = Status.STALE,
+                    reason = "読み取り時刻を確認できないため失効しています。" +
+                        "出席状況を確認するには CLASS のモバイル出席登録を開いてください。",
+                    campusNetworkLabelVisible = false,
+                ),
+                null,
+            )
+        }
+        val rawAgeSeconds = Duration.between(capturedAt, now).seconds
+        val ageSeconds = rawAgeSeconds.coerceAtLeast(0L)
+        val transport = snapshot.transport?.let { name ->
+            NetworkTransport.entries.firstOrNull { it.name == name }
+        }
+        val dateLabel = snapshot.displayDateLabel()
+
+        val base = Display(
+            status = Status.STALE,
+            capturedAt = capturedAt,
+            ageSeconds = ageSeconds,
+            transport = transport,
+            dateLabel = dateLabel,
+            campusNetworkLabelVisible = snapshot.campusNetworkLabelVisible,
+        )
+
+        // 端末の時計が読み取り時刻より前に戻っている場合は、経過時間を信用せず失効させる。
+        if (rawAgeSeconds < 0L) {
+            return Pair(
+                base.copy(
+                    reason = "端末の時計が読み取り時刻より前になっているため、読み取り結果を使いません。" +
+                        "出席状況を確認するには CLASS のモバイル出席登録を開いてください。",
+                ),
+                null,
+            )
+        }
+        // 経過時間。[MAX_AGE] 以上で失効（ちょうど MAX_AGE も失効させる）。
+        if (ageSeconds >= MAX_AGE.seconds) {
+            return Pair(
+                base.copy(
+                    reason = "${formatAge(ageSeconds)}前の読み取りのため失効しています。" +
+                        "出席状況を確認するには CLASS のモバイル出席登録を開いてください。",
+                ),
+                null,
+            )
+        }
+        // 日付。年が画面に無い場合は月日だけで比較する（キャッシュ側の年は推測しない）。
+        if (!snapshot.matchesDate(now.toLocalDate())) {
+            return Pair(
+                base.copy(
+                    reason = "読み取った日付（${dateLabel ?: "不明"}）が今日ではないため失効しています。",
+                ),
+                null,
+            )
+        }
+        // 読み取り時のネットワーク状態。
+        if (!snapshot.networkKnown || snapshot.transport == null) {
+            return Pair(
+                base.copy(reason = "読み取り時のネットワーク状態を確認できないため失効しています。"),
+                null,
+            )
+        }
+        if (!currentNetworkKnown || currentTransport == null) {
+            return Pair(
+                base.copy(reason = "現在のネットワーク状態を確認できないため失効しています。"),
+                null,
+            )
+        }
+        if (transport != currentTransport) {
+            return Pair(
+                base.copy(
+                    reason = "読み取り時（${transportLabel(transport)}）と現在" +
+                        "（${transportLabel(currentTransport)}）のネットワークが異なるため失効しています。",
+                ),
+                null,
+            )
+        }
+        // ログイン切れが確認できている場合は、古い読み取り結果を使わない。
+        if (loginState == LoginState.LOGGED_OUT) {
+            return Pair(
+                base.copy(
+                    reason = "ログイン切れが確認されているため、以前の読み取り結果を使いません。" +
+                        "CLASS にログインし直してから出席状況を確認してください。",
+                ),
+                null,
+            )
+        }
+        return Pair(base, now.toLocalDate())
+    }
+
+    /**
+     * 画面の授業ブロック 1 件を評価する。同じ行に明示された状態だけを使い、時間割の時限や
+     * 出席履歴からは推測しない。受付時間が無い・不正な行も授業名は残し、状態は未確認にする。
+     */
+    private fun evaluatePageCourse(
+        course: MobileAttendancePageCourse,
+        base: Display,
+        now: LocalDateTime,
+        targetDate: LocalDate,
+    ): Display {
+        if (course.confirmed) {
+            return base.copy(status = Status.CONFIRMED, reason = null)
+        }
+        val start = course.windowStartMinutes?.let { minutesToTime(it) }
+        val end = course.windowEndMinutes?.let { minutesToTime(it) }
+        if (start == null || end == null || !end.isAfter(start)) {
+            return base.copy(status = Status.NOT_APPLICABLE)
+        }
+        val deadline = LocalDateTime.of(targetDate, end)
+        if (now.isBefore(LocalDateTime.of(targetDate, start))) {
+            return base.copy(
+                status = Status.BEFORE_START,
+                windowStartLabel = formatTime(start),
+                windowEndLabel = formatTime(end),
+                deadline = deadline,
+                reason = "出席確認の受付開始前（${formatTime(start)}～）です。" +
+                    "受付状況は CLASS で確認してください。",
+            )
+        }
+        if (now.isAfter(deadline)) {
+            return base.copy(
+                status = Status.EXPIRED,
+                windowStartLabel = formatTime(start),
+                windowEndLabel = formatTime(end),
+                deadline = deadline,
+                reason = "出席確認の受付時間（${formatTime(start)}～${formatTime(end)}）を" +
+                    "過ぎています。出席状況は CLASS で確認してください。",
+            )
+        }
+        return base.copy(
+            status = Status.PENDING,
+            reason = null,
+            windowStartLabel = formatTime(start),
+            windowEndLabel = formatTime(end),
+            remainingSeconds = Duration.between(now, deadline).seconds.coerceAtLeast(0L),
+            deadline = deadline,
+        )
+    }
 
     private fun minutesToTime(minutes: Int): LocalTime? =
         runCatching { LocalTime.of(minutes / 60, minutes % 60) }.getOrNull()

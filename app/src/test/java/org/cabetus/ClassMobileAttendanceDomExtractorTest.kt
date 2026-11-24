@@ -6,6 +6,8 @@ import org.cabetus.data.classweb.ClassMobileAttendanceDomExtractor.CapturedDate
 import org.cabetus.data.classweb.ClassMobileAttendanceDomExtractor.ConfirmationWindow
 import org.cabetus.data.classweb.ClassMobileAttendanceDomExtractor.ObservedCourse
 import org.cabetus.data.classweb.ClassMobileAttendanceDomExtractor.SlotLabel
+import org.cabetus.data.classweb.MobileAttendancePageCourse
+import org.cabetus.data.classweb.projectMobileAttendancePageCourses
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -67,6 +69,31 @@ class ClassMobileAttendanceDomExtractorTest {
     """.trimIndent()
 
     @Test
+    fun pageCoursesKeepTheVisibleNameAndStatusFromTheSameBlockWithoutASlot() {
+        val result = ClassMobileAttendanceDomExtractor.parseEvaluationResult(
+            evaluatedString(payload(listOf(
+                courseJson(courseNames = """["CLASSの科目Ａ"]""", dates = "[]", windows = "[]"),
+                courseJson(courseNames = """["CLASSの科目Ｂ"]""", dates = "[]", successCount = 0, confirmationOpen = true),
+                courseJson(courseNames = """["受付時間だけ"]""", successCount = 0),
+                courseJson(courseNames = """["受付中だが時間なし"]""", windows = "[]", successCount = 0, confirmationOpen = true),
+                courseJson(courseNames = """["候補１", "候補２"]"""),
+                courseJson(courseNames = "[]"),
+                courseJson(courseNames = """["別の日"]""", dates = """["2026/07/07(火)"]"""),
+            ))),
+        )
+        assertTrue(result.isSuccess)
+        assertEquals(
+            listOf(
+                MobileAttendancePageCourse("CLASSの科目Ａ", confirmed = true),
+                MobileAttendancePageCourse("CLASSの科目Ｂ", confirmed = false, 620, 720),
+                MobileAttendancePageCourse("受付時間だけ", confirmed = false),
+                MobileAttendancePageCourse("受付中だが時間なし", confirmed = false),
+            ),
+            projectMobileAttendancePageCourses(requireNotNull(result.observation)),
+        )
+    }
+
+    @Test
     fun separateDateHeadingIsReadWithoutSearchingBodyOrForms() {
         val script = ClassMobileAttendanceDomExtractor.SCRIPT
         assertTrue(script.contains("var headings = document.querySelectorAll(TITLE_SELECTOR)"))
@@ -106,6 +133,7 @@ class ClassMobileAttendanceDomExtractorTest {
 
             // label は授業ブロック内だけで走査し、ページ全体の label は走査しない。
             assertTrue(script.contains("block.querySelectorAll(LABEL_SELECTOR)"))
+            assertTrue(script.contains("element.closest('.' + DATA_ALL_CLASS) !== block"))
             assertFalse(script.contains("document.querySelectorAll(LABEL_SELECTOR)"))
             assertFalse(script.contains("document.querySelectorAll('label')"))
             assertFalse(script.contains("getElementsByTagName('label')"))

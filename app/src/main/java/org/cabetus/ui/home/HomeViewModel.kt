@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -111,6 +112,9 @@ class HomeViewModel @Inject constructor(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeUiState())
 
+    private val jstTicker = secondTicker()
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+
     /**
      * 今日の授業と実施中授業の残り時間。
      *
@@ -120,7 +124,7 @@ class HomeViewModel @Inject constructor(
     val timeline: StateFlow<ClassTimeline> = combine(
         timetableDao.observeAll(),
         classCourseDao.observeAll(),
-        secondTicker(),
+        jstTicker,
     ) { cells, courses, now ->
         ClassTimelineResolver.resolve(
             cells = cells,
@@ -196,44 +200,32 @@ class HomeViewModel @Inject constructor(
         org.cabetus.domain.CampusNetworkEvidence.label(snapshot, network, System.currentTimeMillis(), mobile.authRequired)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val attendanceEvidence: StateFlow<MobileAttendanceEvidence.Display> = combine(
+    /**
+     * CLASS の画面に写した授業ブロックの出席表示（画面の表示順のまま）。
+     *
+     * 実施中のコマの有無には依存せず、[MobileAttendanceRepository.snapshot] の
+     * [org.cabetus.data.classweb.MobileAttendanceSnapshot.pageCourses] だけを評価する。
+     * 現在時刻は JST ティッカーから直接取り、端末ネットワークと
+     * 背景読み取りの要再ログイン状態を併せて渡す。キャッシュが失効していれば空リスト。
+     */
+    val attendancePanel: StateFlow<List<MobileAttendanceEvidence.PageCourseDisplay>> = combine(
         mobileAttendanceRepository.snapshot,
-        timeline,
+        jstTicker,
         networkStatus,
         mobileStatus,
-    ) { snapshot, classTimeline, network, mobile ->
-        val current = classTimeline.current
-        val now = classTimeline.now
-        when {
-            snapshot == null -> MobileAttendanceEvidence.Display(
-                status = MobileAttendanceEvidence.Status.NONE,
-            )
-
-            current == null || now == null -> MobileAttendanceEvidence.Display(
-                status = MobileAttendanceEvidence.Status.NOT_APPLICABLE,
-                reason = "実施中の授業がないため、出席完了は表示しません。",
-            )
-
-            else -> MobileAttendanceEvidence.evaluate(
-                snapshot = snapshot,
-                now = now,
-                dayOfWeek = classTimeline.date.dayOfWeek.value,
-                period = current.period,
-                courseCode = current.courseCode,
-                currentTransport = network.transport.takeIf { network.isKnown && network.isConnected },
-                currentNetworkKnown = network.isKnown && network.isConnected,
-                loginState = if (mobile.authRequired) {
-                    MobileAttendanceEvidence.LoginState.LOGGED_OUT
-                } else {
-                    MobileAttendanceEvidence.LoginState.UNKNOWN
-                },
-            )
-        }
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5000),
-        MobileAttendanceEvidence.Display(status = MobileAttendanceEvidence.Status.NONE),
-    )
+    ) { snapshot, now, network, mobile ->
+        MobileAttendanceEvidence.evaluatePage(
+            snapshot = snapshot,
+            now = now,
+            currentTransport = network.transport.takeIf { network.isKnown && network.isConnected },
+            currentNetworkKnown = network.isKnown && network.isConnected,
+            loginState = if (mobile.authRequired) {
+                MobileAttendanceEvidence.LoginState.LOGGED_OUT
+            } else {
+                MobileAttendanceEvidence.LoginState.UNKNOWN
+            },
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** 画面表示中だけ購読する LETUS コース一覧（[classState] と共有）。 */
     val letusCourses = moodleCourseDao.observeAll()

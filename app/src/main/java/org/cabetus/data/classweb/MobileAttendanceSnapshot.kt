@@ -10,7 +10,7 @@ import org.cabetus.data.network.NetworkTransport
  * CLASS モバイル出席登録の画面から読み取った「出席」表示のキャッシュ。
  *
  * 画面の値を**そのまま保存する**のではなく、時間割のコマと確実に紐付けられた分だけを
- * [confirmed] に残す。紐付けできなかった授業は件数だけを保持する（科目名は保存しない）。
+ * [confirmed] に残す。ホームの出席欄用の [pageCourses] は時間割とは別に、画面で確認した科目名を保持する。
  * 読み取った時刻・端末のネットワーク種別・対象日付を併せて保持し、
  * 表示時に古さ（[org.cabetus.domain.MobileAttendanceEvidence]）を判定して失効させる。
  *
@@ -49,6 +49,12 @@ data class MobileAttendanceSnapshot(
     val pendingUnboundCourseCount: Int = 0,
     /** 未提出の表示を、表記の重複などで判定できなかった件数。 */
     val pendingAmbiguousCourseCount: Int = 0,
+    /**
+     * 画面の授業ブロックを、時間割と紐付けずに**そのまま**写した一覧。
+     * [confirmed] / [pending]（時間割と紐付いた分だけ）とは別物で、科目コード・曜日時限は持たない。
+     * 既存レコードとの互換のため既定は空。
+     */
+    val pageCourses: List<MobileAttendancePageCourse> = emptyList(),
     /** 画面で確認できた注意事項（画面固有の生テキストは含めない）。 */
     val warnings: List<String> = emptyList(),
 ) {
@@ -108,6 +114,71 @@ data class PendingAttendanceRecord(
     val inferenceBasis: String? = null,
 )
 
+/**
+ * 画面に表示されていた 1 授業ブロック分の写し（時間割とは独立）。
+ *
+ * 科目名と、画面で明示されていた状態だけを持つ。科目コード・曜日時限・ラベルは推測しない。
+ * 受付時間は「出席確認中」で同じブロックに有効な受付時間が明示されていた場合だけ、
+ * 開始・終了の両方を組で保存する（「出席」の場合は持たない）。
+ */
+@Serializable
+data class MobileAttendancePageCourse(
+    val courseName: String,
+    /** 同じブロックに「出席」が明示されていたか。false は出席済みを確認できなかったことだけを示す。 */
+    val confirmed: Boolean,
+    /** 出席確認の受付開始（0:00 からの分）。無ければ null。 */
+    val windowStartMinutes: Int? = null,
+    /** 出席確認の受付終了（0:00 からの分）。無ければ null。 */
+    val windowEndMinutes: Int? = null,
+) {
+    companion object {
+        /** 保持する授業ブロック数の上限。 */
+        const val MAX_COURSES: Int = ClassMobileAttendanceDomExtractor.MAX_COURSES
+
+        /** 科目名として保存してよい文字数の上限。 */
+        const val MAX_NAME_LENGTH: Int = 120
+    }
+}
+
+/**
+ * 画面の読み取り結果から、時間割と紐付けない授業ブロックの写しを作る純ロジック。
+ *
+ * 採用するのは、次のすべてを満たすブロックだけである。
+ * - 表記の重複・欠席などの表記が無く（[ClassMobileAttendanceDomExtractor.ObservedCourse.ambiguous]
+ *   が false）、科目名を一意に確認でき、正規化後の長さが
+ *   [MobileAttendancePageCourse.MAX_NAME_LENGTH] 以下
+ * - ページ日付が確認できており、ブロックに明示された日付があればページ日付と一致する
+ *
+ * 「出席」が明示されていれば出席を、そうでなければ同じブロックに「出席確認中」と
+ * 有効な受付時間が揃っているときだけ受付時間を保持する。それ以外は科目名だけを保持する。
+ * 曜日時限・科目コード・出席状態は
+ * 推測せず、時間割との紐付け（[MobileAttendanceBinder]）や出席履歴には触れない。
+ *
+ * 同じ科目名のブロックが別の行にあっても統合・捏造せず、別々の要素として画面の順に残す。
+ * 上限を超えた分は採用しない。
+ */
+fun projectMobileAttendancePageCourses(
+    observation: ClassMobileAttendanceDomExtractor.Observation,
+): List<MobileAttendancePageCourse> {
+    val pageDate = observation.pageDate ?: return emptyList()
+    return observation.courses.mapNotNull { course ->
+        if (course.ambiguous) return@mapNotNull null
+        if (course.date != null && !course.date.sameDateAs(pageDate)) return@mapNotNull null
+        val name = course.courseName
+            ?.takeIf { it.isNotBlank() && it.length <= MobileAttendancePageCourse.MAX_NAME_LENGTH }
+            ?: return@mapNotNull null
+        val window = course.confirmationWindow?.takeIf {
+            !course.successLabelVisible && course.confirmationOpen && it.isValid
+        }
+        MobileAttendancePageCourse(
+            courseName = name,
+            confirmed = course.successLabelVisible,
+            windowStartMinutes = window?.start?.let { it.hour * 60 + it.minute },
+            windowEndMinutes = window?.end?.let { it.hour * 60 + it.minute },
+        )
+    }.take(MobileAttendancePageCourse.MAX_COURSES)
+}
+
 /** 保存済みキャッシュ文字列と [MobileAttendanceSnapshot] の相互変換。 */
 object MobileAttendanceCodec {
 
@@ -145,6 +216,7 @@ object MobileAttendanceCodec {
         if (snapshot.year != null && snapshot.year !in 2000..2100) return false
         if (snapshot.confirmed.size > MAX_CONFIRMED) return false
         if (snapshot.pending.size > MAX_CONFIRMED) return false
+        if (snapshot.pageCourses.size > MobileAttendancePageCourse.MAX_COURSES) return false
         if (snapshot.unboundCourseCount !in 0..MAX_CONFIRMED * 10) return false
         if (snapshot.ambiguousCourseCount !in 0..MAX_CONFIRMED * 10) return false
         if (snapshot.pendingUnboundCourseCount !in 0..MAX_CONFIRMED * 10) return false
@@ -163,7 +235,22 @@ object MobileAttendanceCodec {
             return false
         }
         if (!snapshot.confirmed.all { record -> record.isValid() }) return false
+        if (!snapshot.pageCourses.all { course -> course.isValid() }) return false
         return snapshot.pending.all { record -> record.isValid() }
+    }
+
+    /**
+     * 画面の写しの整合。科目名の長さと、受付時間の組（両方あり／両方なし）を確認する。
+     * 「出席」に受付時間を付けない（画面の写しを取り違えない）。
+     */
+    private fun MobileAttendancePageCourse.isValid(): Boolean {
+        if (courseName.isBlank()) return false
+        if (courseName.length > MobileAttendancePageCourse.MAX_NAME_LENGTH) return false
+        if (windowStartMinutes == null && windowEndMinutes == null) return true
+        if (confirmed) return false
+        val start = windowStartMinutes ?: return false
+        val end = windowEndMinutes ?: return false
+        return start in 0 until 24 * 60 && end in 1 until 24 * 60 && start < end
     }
 
     private fun ConfirmedAttendanceRecord.isValid(): Boolean =

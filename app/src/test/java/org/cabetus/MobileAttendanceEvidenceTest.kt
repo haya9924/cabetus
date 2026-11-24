@@ -1,6 +1,8 @@
 package org.cabetus
 
 import org.cabetus.data.classweb.ConfirmedAttendanceRecord
+import org.cabetus.data.classweb.MobileAttendanceCodec
+import org.cabetus.data.classweb.MobileAttendancePageCourse
 import org.cabetus.data.classweb.MobileAttendanceSnapshot
 import org.cabetus.data.network.NetworkTransport
 import org.cabetus.domain.MobileAttendanceEvidence
@@ -72,6 +74,70 @@ class MobileAttendanceEvidenceTest {
         currentTransport = transport,
         currentNetworkKnown = known,
     )
+
+    private fun pagePanel(
+        snapshot: MobileAttendanceSnapshot?,
+        at: LocalDateTime = now,
+        transport: NetworkTransport? = NetworkTransport.WIFI,
+        known: Boolean = true,
+        login: MobileAttendanceEvidence.LoginState = MobileAttendanceEvidence.LoginState.UNKNOWN,
+    ) = MobileAttendanceEvidence.evaluatePage(snapshot, at, transport, known, login)
+
+    @Test
+    fun panelDisplaysClassNamesAndDoesNotFallBackToTimetableRecords() {
+        assertTrue(pagePanel(snapshot()).isEmpty())
+        val pageCourses = listOf(
+            MobileAttendancePageCourse("ＣＬＡＳＳの科目", confirmed = true),
+            MobileAttendancePageCourse("別の出席確認", confirmed = false, 535, 545),
+            MobileAttendancePageCourse("科目名だけ確認できた授業", confirmed = false),
+        )
+        for (confirmed in listOf(emptyList(), listOf(record().copy(courseName = "時間割だけの科目")))) {
+            val read = snapshot(confirmed = confirmed).copy(pageCourses = pageCourses)
+            val roundTrip = MobileAttendanceCodec.decode(MobileAttendanceCodec.encode(read))
+            assertEquals(read, roundTrip)
+            val rows = pagePanel(roundTrip)
+            assertEquals(pageCourses.map { it.courseName }, rows.map { it.courseName })
+            assertTrue(rows[0].attendance.isConfirmed)
+            assertEquals(null, rows[0].attendance.windowLabel)
+            assertTrue(rows[1].attendance.isPending)
+            assertEquals(300L, rows[1].attendance.remainingSeconds)
+            assertEquals(MobileAttendanceEvidence.Status.NOT_APPLICABLE, rows[2].attendance.status)
+            assertFalse(rows.any { it.attendance.inferred })
+        }
+    }
+
+    @Test
+    fun panelOnlyShowsPendingDuringItsOwnWindow() {
+        val read = snapshot(capturedAt = now.minusMinutes(1)).copy(pageCourses = listOf(
+            MobileAttendancePageCourse("受付確認", confirmed = false, 540, 545),
+        ))
+        val before = pagePanel(read, now.minusSeconds(1)).single()
+        assertEquals("受付確認", before.courseName)
+        assertFalse(before.attendance.isPending)
+        assertEquals(null, before.attendance.remainingSeconds)
+        assertEquals(300L, pagePanel(read).single().attendance.remainingSeconds)
+        assertEquals(0L, pagePanel(read, now.plusMinutes(5)).single().attendance.remainingSeconds)
+        val after = pagePanel(read, now.plusMinutes(5).plusSeconds(1)).single()
+        assertEquals("受付確認", after.courseName)
+        assertFalse(after.attendance.isPending)
+        assertEquals(null, after.attendance.remainingSeconds)
+    }
+
+    @Test
+    fun panelRejectsExpiredWrongDateOrUntrustworthyCaptures() {
+        val read = snapshot().copy(pageCourses = listOf(MobileAttendancePageCourse("CLASS科目", confirmed = true)))
+        assertEquals(1, pagePanel(read, now.plusMinutes(15).minusSeconds(1)).size)
+        assertTrue(pagePanel(read, now.plusMinutes(15)).isEmpty())
+        assertTrue(pagePanel(read, now.minusSeconds(1)).isEmpty())
+        assertTrue(pagePanel(read.copy(day = 5)).isEmpty())
+        assertTrue(pagePanel(read.copy(year = null, weekdayLabel = "火")).isEmpty())
+        assertEquals(1, pagePanel(read.copy(year = null, weekdayLabel = "月")).size)
+        assertTrue(pagePanel(read.copy(networkKnown = false)).isEmpty())
+        assertTrue(pagePanel(read, known = false).isEmpty())
+        assertTrue(pagePanel(read, transport = NetworkTransport.CELLULAR).isEmpty())
+        assertTrue(pagePanel(read, login = MobileAttendanceEvidence.LoginState.LOGGED_OUT).isEmpty())
+        assertTrue(pagePanel(null).isEmpty())
+    }
 
     @Test
     fun no_snapshot_is_none() {
