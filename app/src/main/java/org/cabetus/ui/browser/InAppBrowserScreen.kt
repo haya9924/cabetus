@@ -1329,8 +1329,8 @@ fun InAppBrowserScreen(
                     Text(message, style = MaterialTheme.typography.bodySmall)
                     HorizontalDivider()
                     Text(
-                        "ホームの「出席完了」は、読み取り時刻から15分、または対象の授業の終了までしか" +
-                            "表示しません。日付やネットワーク（Wi-Fi / モバイル）が変わると失効します。" +
+                        "ホームの出席欄には、CLASS の出席登録画面から読み取った科目名と出席状況を表示します。" +
+                            "読み取りから15分経過するか、日付やネットワークが変わると失効します。" +
                             "学内/学外は CLASS に「学内ネットワークからのアクセス」が表示されていた場合だけ" +
                             "「学内」と表示します。",
                         style = MaterialTheme.typography.labelSmall,

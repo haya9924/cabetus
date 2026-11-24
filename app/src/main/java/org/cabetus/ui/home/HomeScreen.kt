@@ -98,7 +98,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val classState by viewModel.classState.collectAsStateWithLifecycle()
-    val attendance by viewModel.attendanceEvidence.collectAsStateWithLifecycle()
+    val attendancePanel by viewModel.attendancePanel.collectAsStateWithLifecycle()
     val campusLabel by viewModel.campusNetworkLabel.collectAsStateWithLifecycle()
     val letusCourses by viewModel.letusCourses.collectAsStateWithLifecycle()
     val network by viewModel.networkStatus.collectAsStateWithLifecycle()
@@ -168,7 +168,7 @@ fun HomeScreen(
             item {
                 ClassCard(
                     state = classState,
-                    attendance = attendance,
+                    attendancePanel = attendancePanel,
                     mobile = mobileStatus,
                     onOpenClass = { openBrowser(BrowserUrlPolicy.CLASS_URL) },
                     onOpenLetus = ::openBrowser,
@@ -387,7 +387,7 @@ private fun HourlyCell(h: org.cabetus.data.weather.HourlyForecast) {
 @Composable
 private fun ClassCard(
     state: HomeClassState,
-    attendance: MobileAttendanceEvidence.Display,
+    attendancePanel: List<MobileAttendanceEvidence.PageCourseDisplay>,
     mobile: ClassAttendanceBackgroundController.MobileStatus,
     onOpenClass: () -> Unit,
     onOpenLetus: (String) -> Unit,
@@ -408,7 +408,7 @@ private fun ClassCard(
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (current != null) {
-                CurrentClassBlock(current, attendance, mobile)
+                CurrentClassBlock(current)
             } else if (next == null) {
                 Text(
                     when {
@@ -424,6 +424,8 @@ private fun ClassCard(
             if (next != null) {
                 NextClassBlock(next, timeline.now)
             }
+            // 出席状況は実施中のコマの有無によらず、CLASS の画面に写した授業ブロックだけで示す。
+            AttendancePanelSection(attendancePanel, mobile)
             if (timeline.slots.isNotEmpty()) {
                 TodaySlotsRow(timeline.slots)
             }
@@ -763,11 +765,7 @@ private fun TodaySlotChip(slot: ClassSlotState, modifier: Modifier) {
 }
 
 @Composable
-private fun CurrentClassBlock(
-    slot: ClassSlotState,
-    attendance: MobileAttendanceEvidence.Display,
-    mobile: ClassAttendanceBackgroundController.MobileStatus,
-) {
+private fun CurrentClassBlock(slot: ClassSlotState) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             slot.name,
@@ -795,11 +793,66 @@ private fun CurrentClassBlock(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * 「出席状況（CLASS）」のセクション。
+ *
+ * CLASS の画面に写した授業ブロックを表示順のまま並べ、科目名の隣にその行の状態だけを出す。
+ * 行が無い場合は科目名も状態も推測せず、自動確認の実行中か「状況未確認」だけを示す。
+ * 読み取り時刻はセクションに 1 回だけ出し、行ごとには繰り返さない。
+ */
+@Composable
+private fun AttendancePanelSection(
+    courses: List<MobileAttendanceEvidence.PageCourseDisplay>,
+    mobile: ClassAttendanceBackgroundController.MobileStatus,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "出席状況（CLASS）",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+        )
+        if (courses.isEmpty()) {
+            Text(
+                when {
+                    mobile.running -> "確認中…"
+                    mobile.authRequired -> "CLASS にログインしてください"
+                    else -> MobileAttendanceEvidence.STATUS_UNKNOWN_LABEL
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            courses.forEach { course ->
+                AttendancePanelRow(course.attendance, course.courseName)
+            }
+            // 手動反映という表現を避け、中立的に最後の確認時刻だけをセクションに 1 回示す。
+            lastCheckedLabel(courses.first().attendance)?.let { checked ->
+                Text(
+                    checked,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** 1 授業ブロック分の行。科目名の隣に、その行で明示された状態だけを出す。 */
+@Composable
+private fun AttendancePanelRow(
+    attendance: MobileAttendanceEvidence.Display,
+    courseName: String,
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(courseName, style = MaterialTheme.typography.bodyMedium)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            AttendancePill(attendance, mobile)
+            AttendanceStatusPill(attendance)
             if (attendance.isPending) {
                 attendance.remainingSeconds?.let { remaining ->
                     Text(
@@ -819,22 +872,6 @@ private fun CurrentClassBlock(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-        }
-        // 推定で紐付けたコマは「推定」と短い根拠を添える。
-        MobileAttendanceEvidence.inferenceLabel(attendance)?.let { inference ->
-            Text(
-                inference,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        // 手動反映という表現を避け、中立的に最後の確認時刻だけを示す。
-        lastCheckedLabel(attendance)?.let { checked ->
-            Text(
-                checked,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -874,21 +911,12 @@ private fun PhaseLabel(phase: ClassPhase) {
 /**
  * 出席状況の小さなピル。
  *
- * 自動確認が動作中なら「確認中…」、CLASS の表示を読み取れた場合だけ
- * 「出席完了」「受付中」を出す。それ以外は「状況未確認」のような
- * 推測・案内を出さず、自動確認の短いメッセージか「—」に留める。
+ * 明示された「出席完了」「受付中」だけを出し、それ以外は「状況未確認」にまとめる。
+ * 自動確認の短いメッセージや推測・案内は行に出さない。
  */
 @Composable
-private fun AttendancePill(
-    attendance: MobileAttendanceEvidence.Display,
-    mobile: ClassAttendanceBackgroundController.MobileStatus,
-) {
+private fun AttendanceStatusPill(attendance: MobileAttendanceEvidence.Display) {
     val (label, container, content) = when {
-        mobile.running -> Triple(
-            "確認中…",
-            MaterialTheme.colorScheme.surfaceVariant,
-            MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         attendance.isConfirmed -> Triple(
             "出席完了",
             MaterialTheme.colorScheme.primary,
@@ -900,7 +928,7 @@ private fun AttendancePill(
             MaterialTheme.colorScheme.onTertiaryContainer,
         )
         else -> Triple(
-            mobile.message.ifBlank { "—" },
+            MobileAttendanceEvidence.STATUS_UNKNOWN_LABEL,
             MaterialTheme.colorScheme.surfaceVariant,
             MaterialTheme.colorScheme.onSurfaceVariant,
         )

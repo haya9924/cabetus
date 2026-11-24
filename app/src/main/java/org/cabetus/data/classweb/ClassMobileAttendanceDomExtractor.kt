@@ -40,13 +40,13 @@ import java.time.MonthDay
  *   IP アドレス等の label は走査しない。
  *
  * 見出し以外の兄弟・親・他の label や、入力欄・表のセル・任意の div/span は走査しない。
- * 曜日時限が読めない画面では、科目・日付を一意に紐付けられないものとして何も反映しない。
+ * ホームの出席欄には、曜日時限に依存せず、同じブロックから読み取った科目名と状態を表示する。
  * 入力欄（出席コード）の値・IP アドレス・Cookie・localStorage・フォーム値・hidden input は読まない
  * （IP アドレスを探す正規表現も持たない）。`addJavascriptInterface` は使わない。
  *
  * 出席の判定は「`label.attendSuc` + 完全一致『出席』」だけを根拠にし、
  * `sizeBig` などの見た目の class から出席を推測しない（実機で確認済みの形式のみ）。
- * 科目名・日付・時限を一意に確定できない授業は出席完了・未提出のどちらにも扱わない。
+ * 科目名や対象日付を確認できない場合は、ホームの出席欄には表示しない。
  *
  * 出欠の登録・送信・コード入力は行わない。読み取り専用。
  */
@@ -353,7 +353,7 @@ object ClassMobileAttendanceDomExtractor {
           var labels = block.querySelectorAll(LABEL_SELECTOR);
           for (var i = 0; i < labels.length && scanned < MAX_LABELS_PER_BLOCK; i++) {
             var element = labels[i];
-            if (!visible(element)) continue;
+            if (element.closest('.' + DATA_ALL_CLASS) !== block || !visible(element)) continue;
             scanned++;
 
             var isSuccess = hasClassToken(element, SUCCESS_CLASS);
@@ -943,20 +943,11 @@ object ClassMobileAttendanceDomExtractor {
         if (courses.any { it.ambiguous }) {
             courseWarnings += "判定できない表記（欠席・候補の重複など）がある授業は反映しません。"
         }
-        if (courses.any { it.successLabelVisible && it.date == null }) {
-            courseWarnings +=
-                "「出席」ラベルの近くに対象日付を確認できない授業は、科目・日付を紐付けられないため反映しません。"
-        }
-        if (courses.any { !it.successLabelVisible && !it.ambiguous && it.confirmationWindow == null }) {
-            courseWarnings +=
-                "出席確認時間を確認できない授業は、未提出としてホームに表示しません。"
-        }
         if (courses.any {
-                !it.successLabelVisible && !it.confirmationOpen && it.confirmationWindow != null
+                !it.successLabelVisible && it.confirmationOpen && !it.ambiguous && it.confirmationWindow == null
             }
         ) {
-            courseWarnings +=
-                "「出席確認中」の表示が無い授業は、未提出としてホームに表示しません。"
+            courseWarnings += "出席確認時間を確認できない授業は、受付の残り時間を表示しません。"
         }
 
         return Result(

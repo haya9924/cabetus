@@ -108,6 +108,7 @@ class MobileAttendanceRepository @Inject constructor(
             ambiguousCourseCount = bound.ambiguousCount,
             pendingUnboundCourseCount = bound.pendingUnboundCount,
             pendingAmbiguousCourseCount = bound.pendingAmbiguousCount,
+            pageCourses = projectMobileAttendancePageCourses(observation),
             warnings = (observation.warnings + bound.warnings).distinct(),
         )
 
@@ -175,31 +176,16 @@ class MobileAttendanceRepository @Inject constructor(
     }
 
     private fun buildMessage(snapshot: MobileAttendanceSnapshot): String = buildString {
-        if (snapshot.confirmed.isEmpty()) {
-            append("出席完了として反映できた授業はありません。")
+        if (snapshot.pageCourses.isEmpty()) {
+            append("出席登録画面から読み取れた科目はありません。")
         } else {
-            append("出席完了を${snapshot.confirmed.size}件の授業に反映しました。")
-        }
-        if (snapshot.pending.isNotEmpty()) {
-            append("\n出席確認の締切を${snapshot.pending.size}件の授業に反映しました。")
+            append("出席登録画面から${snapshot.pageCourses.size}件の科目を読み取りました。")
         }
         if (snapshot.unboundCourseCount > 0) {
-            append("\n時間割と紐付けられない出席が${snapshot.unboundCourseCount}件あります（反映しません）。")
+            append("\n時間割と紐付けられない出席が${snapshot.unboundCourseCount}件あります（出席履歴には連携しません）。")
         }
         if (snapshot.ambiguousCourseCount > 0) {
             append("\n判定できない表記が${snapshot.ambiguousCourseCount}件あります（反映しません）。")
-        }
-        if (snapshot.pendingUnboundCourseCount > 0) {
-            append(
-                "\n時間割と紐付けられない「出席確認中」が${snapshot.pendingUnboundCourseCount}件あります" +
-                    "（締切は表示しません）。",
-            )
-        }
-        if (snapshot.pendingAmbiguousCourseCount > 0) {
-            append(
-                "\n未提出と判定できない「出席確認中」が${snapshot.pendingAmbiguousCourseCount}件あります" +
-                    "（締切は表示しません）。",
-            )
         }
         append("\nこの読み取り結果は、時刻・日付・ネットワークの変化で失効します。")
         append("\nホームの表示は一時的です。日付・科目・時限を確定できた出席完了は、別途出席履歴に保存します。")
