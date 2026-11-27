@@ -17,8 +17,16 @@ import javax.inject.Singleton
 class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContext private val context: Context) {
     data class Status(val running: Boolean = false, val message: String = "", val saved: Int = 0,
                       val total: Int = 0, val authRequired: Boolean = false, val result: ClassAttendanceTour.State? = null)
+    /**
+     * モバイル出席確認モードの進行・結果。
+     *
+     * [failed] は「今回の確認が取得できずに終わった」ことを表す。読み取り前の既存スナップショットは
+     * 失敗では消さないため、[failed] と「表示できる出席情報があるか」は別物である。
+     * [authRequired] と [failed] は同時に true になり得る（認証切れも失敗の一種）。
+     */
     data class MobileStatus(val running: Boolean = false, val message: String = "",
-                            val authRequired: Boolean = false, val completedAt: Long? = null)
+                            val authRequired: Boolean = false, val failed: Boolean = false,
+                            val completedAt: Long? = null)
     /** 変更通知一覧モード。前回の検証済み一覧は失敗時も保持する。 */
     data class ScheduleStatus(
         val running: Boolean = false,
@@ -102,6 +110,16 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
         browserOwners = (browserOwners - 1).coerceAtLeast(0)
         browserSessionMutable.value += 1
     }
+
+    /**
+     * ログインが [BrowserActivity] の外（例: ログイン画面や SSO の完了）で成立したことを通知する。
+     *
+     * 自動読取は「要再ログイン」の間、ブラウザセッションが進むまで再試行しない。セッションを
+     * 進めることで、認証切れの抑止を解除して次の自動確認を許可する。進行中の確認は中断しない。
+     */
+    fun notifyAuthUpdated() {
+        browserSessionMutable.value += 1
+    }
     fun start() {
         if (mutable.value.running) return
         check(!foregroundRequested) { "ブラウザを開いています。" }
@@ -128,7 +146,11 @@ class ClassAttendanceBackgroundController @Inject constructor(@ApplicationContex
             )
             true
         } catch (_: RuntimeException) {
-            mobileMutable.value = MobileStatus(message = "取得できません", completedAt = System.currentTimeMillis())
+            mobileMutable.value = MobileStatus(
+                message = "取得できません",
+                failed = true,
+                completedAt = System.currentTimeMillis(),
+            )
             false
         }
     }

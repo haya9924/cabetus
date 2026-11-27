@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.webkit.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -41,8 +42,28 @@ class ClassAttendanceTourService : Service() {
     private var terminal = false
     private var auth = false
     private var awaitingAuth = false
+    /** この実行中に SSO 画面を経由したか。ログイン完了の検出に使う。 */
+    private var sawSsoThisRun = false
+    /** ログイン完了を 1 実行につき 1 回だけ通知するためのフラグ。 */
+    private var authUpdateNotified = false
     private var mobile = false
     private var mobileResult: MobileAttendanceRepository.CaptureResult? = null
+    /** 現在の document でモバイル出席メニューを押した世代。同じ document で二度押さない。 */
+    private var mobileEntryGeneration = -1L
+    /** 同じ document で NO_COURSES（授業なし）を最初に観測した時刻。未観測なら null。 */
+    private var mobileNoCoursesSince: Long? = null
+    /** [mobileNoCoursesSince] を観測した document 世代。document が変われば計測をやり直す。 */
+    private var mobileNoCoursesGeneration = -1L
+    /** NO_COURSES が安定して「受付対象なし」と確定したか。確定時だけ既存スナップショットを消す。 */
+    private var mobileNoCoursesConfirmed = false
+    /** VERIFY が確定できない状態（capture 失敗・パース不能）が続き始めた時刻。未観測なら null。 */
+    private var mobileNotReadySince: Long? = null
+    /** [mobileNotReadySince] を観測した document 世代。 */
+    private var mobileNotReadyGeneration = -1L
+    /** 失敗が確定したときのユーザー向け理由。finally の message に使う。 */
+    private var mobileFailureMessage: String? = null
+    /** 直近の capture 失敗理由（抽出器の [ClassMobileAttendanceDomExtractor.ErrorCode.userMessage]）。 */
+    private var mobileCaptureFailureMessage: String? = null
     private var schedule = false
     private var scheduleSnapshot: ClassScheduleNoticesDom.Snapshot? = null
     private var timetable = false
@@ -52,6 +73,8 @@ class ClassAttendanceTourService : Service() {
     private var timetableEntryGeneration = -1L
     private var timetableStage = "時間割の取得を開始できませんでした"
     private var diagnosticLogging = false
+    /** onStartCommand ごとの世代。古い finally が新しい job の状態を壊さないために使う。 */
+    private var runGenerationCounter = 0L
     @Inject lateinit var mobileRepository: MobileAttendanceRepository
     @Inject lateinit var networkMonitor: org.cabetus.data.network.NetworkMonitor
     @Inject lateinit var settings: SettingsRepository
@@ -69,24 +92,55 @@ class ClassAttendanceTourService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == CANCEL) { job?.cancel(); if (job == null) stopSelf(); return START_NOT_STICKY }
-        if (intent?.action != START && intent?.action != MOBILE && intent?.action != SCHEDULE && intent?.action != TIMETABLE) { stopSelf(); return START_NOT_STICKY }
-        if (job?.isCompleted == false) return START_NOT_STICKY
+        if (intent?.action == CANCEL) {
+            val running = job
+            running?.cancel()
+            if (running == null || running.isCompleted) {
+                // 実行中の job が無い＝誰も最終状態を公開しない。予約が残っていれば解除する。
+                releaseStaleReservations()
+                job = null
+                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                stopSelf()
+            }
+            return START_NOT_STICKY
+        }
+        val action = intent?.action
+        if (action != START && action != MOBILE && action != SCHEDULE && action != TIMETABLE) { stopSelf(); return START_NOT_STICKY }
+        if (job?.isCompleted == false) {
+            // 既に実行中のモードがある。二重に WebView を持たない。
+            // ただし startForegroundService で起こされた以上 startForeground は必ず履行する。
+            // 実行中の job がまだ running=true を公開している間だけ通知を維持し、
+            // 既に最終状態を公開済みなら通知を再作成しない。
+            if (stillRunningPublished()) runCatching { foreground() }
+            releaseDuplicateReservation(requireNotNull(action))
+            return START_NOT_STICKY
+        }
         terminal = false
         failure = null
         auth = false
         awaitingAuth = false
+        sawSsoThisRun = false
+        authUpdateNotified = false
         loading = false
         saved = 0
         latest = null
-        mobile = intent?.action == MOBILE
-        schedule = intent?.action == SCHEDULE
-        timetable = intent?.action == TIMETABLE
+        mobile = action == MOBILE
+        schedule = action == SCHEDULE
+        timetable = action == TIMETABLE
         mobileResult = null
+        mobileFailureMessage = null
+        mobileCaptureFailureMessage = null
+        mobileEntryGeneration = -1L
+        mobileNoCoursesSince = null
+        mobileNoCoursesConfirmed = false
+        mobileNoCoursesGeneration = -1L
+        mobileNotReadySince = null
+        mobileNotReadyGeneration = -1L
         scheduleSnapshot = null
         timetableOutcome = null
         timetableEntryGeneration = -1L
         timetableStage = "時間割の取得を開始できませんでした"
+        val runGeneration = ++runGenerationCounter
         job = scope.launch(start = CoroutineStart.LAZY) {
             var reason: String? = null
             try {
@@ -95,12 +149,16 @@ class ClassAttendanceTourService : Service() {
                 withTimeout(deadline) { executeTour() }
             } catch (_: TimeoutCancellationException) {
                 auth = awaitingAuth
-                reason = if (timetable) timetableStage else "自動接続が完了しませんでした。保存済み記録は保持しています。"
+                reason = mobileFailureMessage.takeIf { mobile }
+                    ?: if (timetable) timetableStage
+                    else "自動接続が完了しませんでした。保存済み記録は保持しています。"
             }
-              catch (_: CancellationException) { reason = failure ?: "更新を中止しました。保存済み記録は保持しています。" }
+              catch (_: CancellationException) { reason = mobileFailureMessage.takeIf { mobile } ?: failure ?: "更新を中止しました。保存済み記録は保持しています。" }
               catch (e: Exception) {
                   if (mobile && diagnosticLogging) android.util.Log.d("ClassMobileRead", "failed type=${e.javaClass.simpleName} stage=${if (view == null) "host" else "read"}")
-                  reason = failure ?: (if (timetable) timetableStage else "CLASSの画面を確認できませんでした。保存済み記録は保持しています。")
+                  reason = mobileFailureMessage.takeIf { mobile }
+                      ?: failure
+                      ?: if (timetable) timetableStage else "CLASSの画面を確認できませんでした。保存済み記録は保持しています。"
               }
             finally {
                 if (timetable) {
@@ -111,6 +169,9 @@ class ClassAttendanceTourService : Service() {
                         release()
                     } finally {
                         terminal = true
+                        // running=false を公開した直後に Home が同じサービスへ開始要求しても、
+                        // onStartCommand が「まだ終わっていない job」を見ないよう先に参照を外す。
+                        if (runGeneration == runGenerationCounter) job = null
                         try {
                             stopForeground(STOP_FOREGROUND_REMOVE)
                         } finally {
@@ -134,6 +195,7 @@ class ClassAttendanceTourService : Service() {
                         release()
                     } finally {
                         terminal = true
+                        if (runGeneration == runGenerationCounter) job = null
                         try {
                             stopForeground(STOP_FOREGROUND_REMOVE)
                         } finally {
@@ -148,15 +210,32 @@ class ClassAttendanceTourService : Service() {
                         }
                     }
                 } else if (mobile) {
+                    val failed = reason != null || mobileResult?.saved == false
+                    // 既存のスナップショットは、認証切れか「受付対象なし」が確定したときだけ捨てる。
+                    // タイムアウト・中止・一時的な読み取り失敗では保持し、古い情報は
+                    // MobileAttendanceEvidence の鮮度判定に任せる。
                     withContext(NonCancellable) {
-                        if (reason != null || mobileResult?.saved != true) mobileRepository.clear()
+                        if (auth || mobileNoCoursesConfirmed) mobileRepository.clear()
                     }
                     terminal = true
-                    if (diagnosticLogging) android.util.Log.d("ClassMobileRead", "complete success=${reason == null} auth=$auth")
+                    if (diagnosticLogging) android.util.Log.d(
+                        "ClassMobileRead",
+                        "complete success=${reason == null} auth=$auth failed=$failed noCourses=$mobileNoCoursesConfirmed",
+                    )
                     release()
+                    if (runGeneration == runGenerationCounter) job = null
+                    // 「受付対象なし」が確定したときだけ、抽出側の短い説明をそのまま出す。
+                    // 通常の成功時は件数の内訳（mobileAttendanceResultMessage）を優先する。
+                    val settledMessage = mobileResult
+                        ?.takeIf { mobileNoCoursesConfirmed && it.saved }
+                        ?.message
+                        ?.takeIf { it.isNotBlank() }
                     controller.publishMobile(ClassAttendanceBackgroundController.MobileStatus(
-                        message = mobileAttendanceResultMessage(mobileResult, auth, reason != null),
-                        authRequired = auth, completedAt = System.currentTimeMillis()))
+                        message = mobileFailureMessage
+                            ?: settledMessage
+                            ?: mobileAttendanceResultMessage(mobileResult, auth, failed),
+                        authRequired = auth, failed = failed,
+                        completedAt = System.currentTimeMillis()))
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 } else {
@@ -164,6 +243,7 @@ class ClassAttendanceTourService : Service() {
                 if (reason == null && (state == null || state.phase != ClassAttendanceTour.Phase.COMPLETE || state.items.any { it.status != ClassAttendanceTour.ItemStatus.DONE }))
                     reason = state?.stopReason ?: "一部の科目を取得できませんでした。"
                 terminal = true
+                if (runGeneration == runGenerationCounter) job = null
                 val total = state?.items?.size ?: 0
                 release()
                 controller.publish(ClassAttendanceBackgroundController.Status(message = reason ?: "$saved/$total 科目の出欠を更新しました。", saved = saved, total = total, authRequired = auth, result = state))
@@ -179,6 +259,107 @@ class ClassAttendanceTourService : Service() {
         }
         job?.start()
         return START_NOT_STICKY
+    }
+
+    /**
+     * このサービスがまだ「実行中」を公開しているか。二重起動要求のときに
+     * フォアグラウンド通知を維持すべきかの判定に使う。
+     */
+    private fun stillRunningPublished(): Boolean = when {
+        mobile -> controller.mobileStatus.value.running
+        schedule -> controller.scheduleStatus.value.running
+        timetable -> controller.timetableStatus.value.running
+        else -> controller.status.value.running
+    }
+
+    /**
+     * 実行中の job が無いのに残っている予約（running=true）をすべて解除する。
+     * サービスが最終状態を公開できずに終わった場合の取り残しを防ぐ。
+     */
+    private fun releaseStaleReservations() {
+        val mobileNow = controller.mobileStatus.value
+        if (mobileNow.running) controller.publishMobile(
+            mobileNow.copy(
+                running = false,
+                failed = true,
+                message = "取得できません",
+                completedAt = System.currentTimeMillis(),
+            ),
+        )
+        val scheduleNow = controller.scheduleStatus.value
+        if (scheduleNow.running) controller.publishSchedule(scheduleNow.copy(running = false, failed = true))
+        val timetableNow = controller.timetableStatus.value
+        if (timetableNow.running) controller.publishTimetable(
+            timetableNow.copy(
+                running = false,
+                failed = true,
+                completedAt = System.currentTimeMillis(),
+                message = "時間割の取り込みを中止しました。",
+            ),
+        )
+        val tourNow = controller.status.value
+        if (tourNow.running) controller.publish(
+            tourNow.copy(running = false, message = "更新を中止しました。保存済み記録は保持しています。"),
+        )
+    }
+
+    /**
+     * 実行中のモードがある状態で `startForegroundService` が届いたときの後始末。
+     *
+     * 二重起動はしない。問題は呼び出し側（`ClassAttendanceBackgroundController`）が
+     * 同期的に予約した `running = true` を誰も消さないと、Home の自動確認が永久に止まること。
+     *
+     * - 要求されたモードが実行中モードと同じなら、その job の `finally` が必ず最終状態を
+     *   公開するので何もしない（進行中の結果を壊さない）。
+     * - 異なるモードなら、そのモードの job は存在しないので予約をここで解除する。
+     *
+     * いずれの場合も `running = true` を取り残さない。
+     */
+    private fun releaseDuplicateReservation(action: String) {
+        val activeMode = when {
+            mobile -> MOBILE
+            schedule -> SCHEDULE
+            timetable -> TIMETABLE
+            else -> START
+        }
+        if (action == activeMode) return
+        when (action) {
+            MOBILE -> {
+                val current = controller.mobileStatus.value
+                if (current.running) controller.publishMobile(
+                    current.copy(
+                        running = false,
+                        failed = true,
+                        message = "取得できません",
+                        completedAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+            SCHEDULE -> {
+                val current = controller.scheduleStatus.value
+                if (current.running) controller.publishSchedule(current.copy(running = false, failed = true))
+            }
+            TIMETABLE -> {
+                val current = controller.timetableStatus.value
+                if (current.running) controller.publishTimetable(
+                    current.copy(
+                        running = false,
+                        failed = true,
+                        completedAt = System.currentTimeMillis(),
+                        message = "時間割を取り込み中です。完了してから再試行してください。",
+                    ),
+                )
+            }
+            else -> {
+                val current = controller.status.value
+                if (current.running) controller.publish(
+                    current.copy(
+                        running = false,
+                        message = "更新を開始できませんでした。完了してから再試行してください。",
+                    ),
+                )
+            }
+        }
     }
     private fun foreground() {
         val cancel = PendingIntent.getService(this, 74005, Intent(this, javaClass).setAction(CANCEL), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -236,6 +417,7 @@ class ClassAttendanceTourService : Service() {
             override fun onPageStarted(v: WebView, url: String?, icon: android.graphics.Bitmap?) {
                 generation++; loading = true
                 awaitingAuth = ClassAttendanceEntryPolicy.classify(url) == ClassAttendanceEntryPolicy.Page.SSO
+                if (awaitingAuth) sawSsoThisRun = true
                 if (ClassAttendanceEntryPolicy.classify(url) == ClassAttendanceEntryPolicy.Page.BLOCKED) fail("許可されていない画面への移動を停止しました。")
             }
             override fun onPageFinished(v: WebView, url: String?) {
@@ -253,7 +435,8 @@ class ClassAttendanceTourService : Service() {
             override fun onReceivedError(v: WebView, request: WebResourceRequest, error: WebResourceError) { if (request.isForMainFrame) fail("CLASSとの通信に失敗しました。") }
             override fun onRenderProcessGone(v: WebView, detail: RenderProcessGoneDetail): Boolean { fail("ブラウザを維持できないため更新を停止しました。"); return true }
         }
-        if (mobile) mobileRepository.clear()
+        // 読み取り開始時にキャッシュを消さない。失敗・中止時に有効なスナップショットを
+        // 失わないため、破棄は「認証切れ」「受付対象なしの確定」だけに限定する（finally 参照）。
         browser.loadUrl(BrowserUrlPolicy.CLASS_URL)
         var ready = false
         val entryDeadline = android.os.SystemClock.elapsedRealtime() + 60_000
@@ -281,22 +464,19 @@ class ClassAttendanceTourService : Service() {
             val login = evaluate("(function(){return !!document.querySelector('form#loginForm') && !!document.querySelector('a[href*=ShibbolethAuthServlet]');})()")
             if (login == "true") { awaitingAuth = true; continue }
             awaitingAuth = false
+            if (sawSsoThisRun && !authUpdateNotified) {
+                // SSO を経由して CLASS に到達した = 新しいログインが成立した可能性が高い。
+                // 「要再ログイン」の抑止を解除し、次の自動確認を許可する。
+                authUpdateNotified = true
+                runCatching { controller.notifyAuthUpdated() }
+            }
             if (schedule) {
                 scheduleSnapshot = ClassScheduleNoticesDom.parse(evaluate(ClassScheduleNoticesDom.SCRIPT))
                 if (scheduleSnapshot != null) return
                 continue
             }
             if (mobile) {
-                val verification = ClassMobileAttendanceDomExtractor.parseVerificationResult(
-                    evaluate(ClassMobileAttendanceDomExtractor.VERIFY_SCRIPT),
-                )
-                if (verification == null) {
-                    if (captureMobile()) return
-                    continue
-                }
-                // 一覧がまだ描画中でもメニューを再操作しない。NO_COURSES は「受付なし」の証拠ではない。
-                if (verification == ClassMobileAttendanceDomExtractor.ErrorCode.NO_COURSES) continue
-                evaluate(ClassMobileAttendanceEntryDom.SCRIPT)
+                if (mobileEntryStep(url)) return
                 continue
             }
             ready = ClassAttendanceListDomExtractor.parseActionResult(evaluate(ClassAttendanceListDomExtractor.LIST_VERIFY_SCRIPT)) == null
@@ -380,13 +560,128 @@ class ClassAttendanceTourService : Service() {
         return true
     }
 
+    /**
+     * モバイル出席確認モードの 1 ステップ。true を返したらこのモードは完了。
+     *
+     * - 検証済みのモバイル出席登録ページで読み取れたら完了。
+     * - `NO_COURSES` が同一 document で [MOBILE_SETTLE_MS] 以上続いたら「受付対象なし」の確定。
+     * - `VERIFY` は通るのに capture が失敗し続けたら、[MOBILE_SETTLE_MS] 経過時点で
+     *   抽出器の理由（例: 対象日付を確認できない）を付けて失敗させる。60 秒のタイムアウトまで
+     *   回し続けない。
+     * - それ以外は入口メニューを 1 document につき 1 回だけ押して待つ（連打しない）。
+     */
+    private suspend fun mobileEntryStep(url: String): Boolean {
+        val doc = generation
+        val onMobilePage = BrowserUrlPolicy.isClassMobileAttendancePage(url)
+        val verification = ClassMobileAttendanceDomExtractor.parseVerificationResult(
+            evaluate(ClassMobileAttendanceDomExtractor.VERIFY_SCRIPT),
+        )
+
+        if (verification == null) {
+            // 検証は通った = 検証済みのモバイル出席登録ページ。読み取る。
+            mobileNoCoursesSince = null
+            mobileNoCoursesGeneration = -1L
+            if (captureMobile()) return true
+            // JSF が日付・行を描画し終えるのを待つ。モバイル出席ページに既に居るので
+            // 入口リンクは押し直さない（CLASS の同時操作検出を誘発する）。
+            return settleOrFailOnMobilePage(doc, onMobilePage) {
+                mobileCaptureFailureMessage
+                    ?: "出席登録の内容を確認できませんでした。CLASS で出席状況を確認してください。"
+            }
+        }
+
+        // パース不能（INVALID_RESULT / SCRIPT_FAILED）は待っても直らないことが多い。
+        // 検証済みモバイル出席ページ上で [MOBILE_SETTLE_MS] 続いたら理由付きで確定する。
+        if (verification == ClassMobileAttendanceDomExtractor.ErrorCode.INVALID_RESULT ||
+            verification == ClassMobileAttendanceDomExtractor.ErrorCode.SCRIPT_FAILED
+        ) {
+            mobileNoCoursesSince = null
+            mobileNoCoursesGeneration = -1L
+            return settleOrFailOnMobilePage(doc, onMobilePage) { verification.userMessage }
+        }
+
+        // 有効な検証結果が返ったので、未確定タイマーは解除する。
+        mobileNotReadySince = null
+        mobileNotReadyGeneration = -1L
+
+        // NO_COURSES を「受付対象なし」と確定してよいのは、検証済みのモバイル出席登録ページ
+        // （Pky50102.xhtml）で安定して続いた場合だけ。別ページの NO_COURSES は入口リンクを押す。
+        if (verification == ClassMobileAttendanceDomExtractor.ErrorCode.NO_COURSES && onMobilePage) {
+            val since = settledSince(mobileNoCoursesSince, mobileNoCoursesGeneration, doc)
+            mobileNoCoursesSince = since
+            mobileNoCoursesGeneration = doc
+            if (SystemClock.elapsedRealtime() - since >= MOBILE_SETTLE_MS) {
+                mobileNoCoursesConfirmed = true
+                mobileResult = MobileAttendanceRepository.CaptureResult(
+                    saved = true,
+                    confirmedCount = 0,
+                    pendingCount = 0,
+                    unboundCount = 0,
+                    ambiguousCount = 0,
+                    message = "出席登録の対象授業はありません",
+                )
+                if (diagnosticLogging) android.util.Log.d("ClassMobileRead", "settled no-courses after ${MOBILE_SETTLE_MS}ms")
+                return true
+            }
+            return false
+        }
+
+        mobileNoCoursesSince = null
+        mobileNoCoursesGeneration = -1L
+        // 既にモバイル出席登録ページなら入口リンクは押さず、4秒続いたら理由付きで確定する。
+        if (onMobilePage) {
+            return settleOrFailOnMobilePage(doc, true) { verification.userMessage }
+        }
+        if (mobileEntryGeneration != doc) {
+            val entry = evaluate(ClassMobileAttendanceEntryDom.SCRIPT)
+            if (entry == "\"enter\"" || entry == "\"opened\"" || entry == "enter" || entry == "opened") {
+                mobileEntryGeneration = doc
+            }
+        }
+        return false
+    }
+
+    /**
+     * モバイル出席ページで「まだ確定できない」状態が [MOBILE_SETTLE_MS] 続いたら、
+     * [reason] を付けて失敗として確定させる。それまでは false（継続）を返す。
+     *
+     * 同じ document での経過時間だけを見るため、JSF の再描画（generation の変化）では
+     * タイマーがリセットされる。60 秒の外側タイムアウトまで無言で回し続けない。
+     */
+    private fun settleOrFailOnMobilePage(
+        doc: Long,
+        onMobilePage: Boolean,
+        reason: () -> String,
+    ): Boolean {
+        if (!onMobilePage) {
+            // モバイル出席ページ以外（入口・メニュー）では確定させない。
+            mobileNotReadySince = null
+            mobileNotReadyGeneration = -1L
+            return false
+        }
+        val since = settledSince(mobileNotReadySince, mobileNotReadyGeneration, doc)
+        mobileNotReadySince = since
+        mobileNotReadyGeneration = doc
+        if (SystemClock.elapsedRealtime() - since < MOBILE_SETTLE_MS) return false
+        val message = reason()
+        mobileFailureMessage = message
+        error(message)
+    }
+
+    /**
+     * 同一 document での観測開始時刻を返す。document が変わっていれば現在時刻からやり直す。
+     * 呼び出し側は返した時刻を [mobileNoCoursesSince] 等へ保存する。
+     */
+    private fun settledSince(since: Long?, sinceGeneration: Long, doc: Long): Long =
+        if (sinceGeneration == doc && since != null) since else SystemClock.elapsedRealtime()
+
     private suspend fun captureMobile(): Boolean {
         val initial = networkMonitor.status.first()
         check(initial.isKnown && initial.isConnected)
-        mobileRepository.clear()
         val doc = generation
         val parsed = ClassMobileAttendanceDomExtractor.parseEvaluationResult(evaluate(ClassMobileAttendanceDomExtractor.SCRIPT))
         if (diagnosticLogging) android.util.Log.d("ClassMobileRead", "parse error=${parsed.error?.name}")
+        if (parsed.error != null) mobileCaptureFailureMessage = parsed.error.userMessage
         // JSF can expose the title/list before the date and rows have settled.
         // Wait within the outer 60s deadline; never substitute the device date.
         val observation = parsed.observation ?: return false
@@ -397,11 +692,13 @@ class ClassAttendanceTourService : Service() {
         }
         val after = networkMonitor.status.first()
         if (after != initial || !alive || loading || generation != doc) {
-            mobileRepository.clear()
+            // ネットワークが変わっただけでは、既存のスナップショットを消さない。
+            // 保存可否は MobileAttendanceEvidence の鮮度・回線一致判定に任せる。
             error("Network changed")
         }
         if (!result.saved) mobileRepository.clear()
         mobileResult = result
+        if (result.saved) mobileFailureMessage = null
         if (diagnosticLogging) android.util.Log.d("ClassMobileRead", "capture saved=${result.saved} confirmed=${result.confirmedCount} pending=${result.pendingCount}")
         return true
     }
@@ -418,12 +715,11 @@ class ClassAttendanceTourService : Service() {
     }
     override fun onDestroy() {
         scope.cancel(); release()
-        if (!terminal && mobile) controller.publishMobile(ClassAttendanceBackgroundController.MobileStatus(message = "取得できません"))
-        if (!terminal && schedule) controller.publishSchedule(
-            controller.scheduleStatus.value.copy(running = false, failed = true, authRequired = auth))
-        if (!terminal && timetable) controller.publishTimetable(
-            controller.timetableStatus.value.copy(running = false, failed = true, authRequired = auth))
-        if (!terminal && !mobile && !schedule && !timetable) controller.publish(ClassAttendanceBackgroundController.Status(message = "更新が停止しました。保存済み記録は保持しています。", saved = saved))
+        if (!terminal) {
+            // サービスが最終状態を公開できずに終了した。予約が残っていると
+            // Home の自動確認・CLASS ブラウザが永久に開けなくなるため、必ず解除する。
+            releaseStaleReservations()
+        }
         super.onDestroy()
     }
     companion object {
@@ -432,5 +728,10 @@ class ClassAttendanceTourService : Service() {
         const val TIMETABLE = "org.cabetus.classTour.TIMETABLE"
         const val START = "org.cabetus.classTour.START"
         const val CANCEL = "org.cabetus.classTour.CANCEL"
+        /**
+         * JSF の描画・メニュー遷移が落ち着くまで待つ時間。
+         * NO_COURSES・capture 失敗がこの時間だけ安定して続いたら結果を確定する。
+         */
+        const val MOBILE_SETTLE_MS = 4_000L
     }
 }

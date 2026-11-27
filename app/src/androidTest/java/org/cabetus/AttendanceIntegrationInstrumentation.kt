@@ -55,6 +55,7 @@ class AttendanceIntegrationInstrumentation : Instrumentation() {
             when (suite) {
                 null -> runBlocking { runChecks() }
                 "schedule-notices" -> ClassScheduleNoticesDeviceChecks.run(this)
+                "mobile-attendance" -> MobileAttendanceDeviceChecks.run(this)
                 else -> error("Unknown instrumentation suite")
             }
         }
