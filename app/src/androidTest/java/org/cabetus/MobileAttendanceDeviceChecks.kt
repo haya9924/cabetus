@@ -118,13 +118,15 @@ internal object MobileAttendanceDeviceChecks {
                 networkMonitor = monitor,
                 confirmations = database.mobileAttendanceConfirmationDao(),
             )
-            database.classCourseDao().upsertAll(
-                listOf(
-                    ClassCourseEntity("ART1", CONFIRMED_COURSE, "", null, null),
-                    ClassCourseEntity("PHY2", PENDING_COURSE, "", null, null),
-                ),
-            )
-            val result = runBlocking { repository.capture(observation, network) }
+            val result = runBlocking {
+                database.classCourseDao().upsertAll(
+                    listOf(
+                        ClassCourseEntity("ART1", CONFIRMED_COURSE, "", null, null),
+                        ClassCourseEntity("PHY2", PENDING_COURSE, "", null, null),
+                    ),
+                )
+                repository.capture(observation, network)
+            }
             check(result.saved) { "Capture was not saved" }
             check(repository.snapshot.value != null) { "Snapshot was not kept in memory" }
 
