@@ -68,7 +68,7 @@ internal object MobileAttendanceDeviceChecks {
 
             // 1) 入口メニュー: 一意な可視リンクだけを押して "opened" を返すこと。
             check(
-                load(instrumentation, view, MENU, menuHtml, ".ui-link.ui-btn.ui-icon-carat-r") { it == "\"1\"" },
+                load(instrumentation, view, MENU, menuHtml, ".ui-link.ui-btn.ui-icon-carat-r") { it == "1" },
             ) { "Menu fixture did not render" }
             val entry = evaluate(instrumentation, view, ClassMobileAttendanceEntryDom.SCRIPT)
             check(entry == "\"opened\"") { "Entry script expected \"opened\", was $entry" }
@@ -81,7 +81,7 @@ internal object MobileAttendanceDeviceChecks {
             check(
                 load(
                     instrumentation, view, MOBILE, mobileHtml(pageDate, window), ".mainContent .dataAll",
-                ) { it == "\"2\"" },
+                ) { it == "2" },
             ) { "Mobile attendance fixture did not render" }
 
             val visibility = evaluate(instrumentation, view, "document.visibilityState")
