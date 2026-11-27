@@ -39,6 +39,7 @@ import org.cabetus.data.weather.WeatherRepository
 import org.cabetus.data.weather.WeatherSummary
 import org.cabetus.domain.AttendanceGoalMonitor
 import org.cabetus.domain.AttendanceRiskRow
+import org.cabetus.domain.ClassSlotState
 import org.cabetus.domain.ClassTimeline
 import org.cabetus.domain.ClassTimelineResolver
 import org.cabetus.domain.attendanceRiskRows
@@ -173,6 +174,30 @@ class HomeViewModel @Inject constructor(
     fun setHomeVisible(visible: Boolean) {
         homeVisible.value = visible
     }
+
+    /** 手動「再確認」の要求回数。値を変えて combine を再評価させ、ゲートを強制的に due にする。 */
+    private val manualRefreshNonce = MutableStateFlow(0)
+    private var handledManualNonce = 0
+
+    /** 要再ログインを検出したときのブラウザセッション（ログインで進むまで自動確認を抑止）。 */
+    private var authLatchSession: Long? = null
+
+    /** 出席状況の手動再確認。認証切れの抑止を解除し、ブラウザ枠が空き次第すぐ実行する。 */
+    fun refreshMobileAttendance() {
+        authLatchSession = null
+        manualRefreshNonce.update { it + 1 }
+    }
+
+    /**
+     * 手動「再確認」を出せるか。実行中・未接続のときは出さない。
+     * 自動確認の対象コマが無くても、読み取り専用の状況確認はいつでも再実行できる。
+     */
+    val canRefreshMobile: StateFlow<Boolean> = combine(
+        networkStatus,
+        mobileStatus,
+    ) { network, mobile ->
+        !mobile.running && network.isKnown && network.isConnected
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     /**
      * 実施中授業の出席状況（PENDING / CONFIRMED / 状況未確認）。
@@ -333,14 +358,14 @@ class HomeViewModel @Inject constructor(
                 _aiState.value = AiCardState.Loaded(text)
             }
         }
-        // ホーム表示中だけ、実施中コマの出席確認を自動で読み取る。
+        // ホーム表示中だけ、実施中コマ／直前に始まるコマの出席確認を自動で読み取る。
         // 非表示時は timeline / networkStatus を購読しない（1秒タイマーを動かさない）。
         // 時間割が未登録の間は、変更通知の自動読取でブラウザ枠を先取りしない
         // （初回の時間割取り込みを優先する）。時間割が登録されれば従来どおり動作する。
         viewModelScope.launch {
-            // 直近に起動を要求したときのブラウザセッション。
-            // 要再ログイン後、CLASS ブラウザを開いて閉じるとセッションが進み、抑制が解ける。
-            var requestSession: Long? = null
+            // 直前に起動に失敗したキーとその時刻。ゲートを消費せずに再試行を間引くためのローカル記録。
+            var lastFailedKey: String? = null
+            var lastFailedAt = 0L
             // 直前の自動更新キーと試行時刻（キーが変わればスロットルしない）。
             val refreshGate = org.cabetus.domain.MobileAttendanceRefreshGate(AUTO_REFRESH_THROTTLE_MS)
 
@@ -353,48 +378,66 @@ class HomeViewModel @Inject constructor(
                             timetableDao.observeAll()
                                 .map { it.isNotEmpty() }
                                 .distinctUntilChanged(),
-                        ) { classTimeline, network, hasTimetable ->
-                            Triple(classTimeline, network, hasTimetable)
+                            manualRefreshNonce,
+                        ) { classTimeline, network, hasTimetable, manualNonce ->
+                            AutoRefreshInput(classTimeline, network, hasTimetable, manualNonce)
                         }
                     } else {
-                        emptyFlow<Triple<ClassTimeline, NetworkStatus, Boolean>>()
+                        emptyFlow<AutoRefreshInput>()
                     }
                 }
-                .collect { (classTimeline, network, hasTimetable) ->
+                .collect { (classTimeline, network, hasTimetable, manualNonce) ->
                     if (!homeVisible.value) return@collect
                     // 時間割が未登録の間は通知・モバイル出席の自動読取を開始しない。
                     if (!hasTimetable) return@collect
-                    val current = classTimeline.current
+                    // 時刻未確定（timeline の初期値 now = null）の間は何も開始しない。
+                    // ここで待たないと、ダミー初期値がブラウザ枠を先取りして時間割の読込を妨げる。
+                    if (classTimeline.now == null) return@collect
                     if (!network.isKnown || !network.isConnected) return@collect
-                    if (backgroundController.isBrowserBusy) return@collect
-
-                    if (current == null) {
-                        tryRefreshScheduleNotices()
-                        return@collect
-                    }
 
                     val session = backgroundController.browserSession.value
-                    // 要再ログインの間は、CLASS ブラウザを開いて閉じる（セッションが進む）まで自動更新しない。
                     val mobile = mobileStatus.value
-                    if (mobile.authRequired) {
-                        if (requestSession == null) requestSession = session
-                        if (requestSession == session) {
-                            tryRefreshScheduleNotices()
-                            return@collect
-                        }
+                    val manualPending = manualNonce != handledManualNonce
+                    // 認証切れの抑止はブラウザセッションが進む（ログイン成立）まで保持する。
+                    // セッションが進んでいれば抑止を解く。
+                    if (authLatchSession != null && authLatchSession != session) authLatchSession = null
+                    // 手動再確認は抑止を解いて、ブラウザ枠が空き次第すぐ実行する。
+                    if (manualPending) authLatchSession = null
+                    if (!manualPending && mobile.authRequired && authLatchSession == null) {
+                        authLatchSession = session
                     }
+                    val authLatched = mobile.authRequired &&
+                        authLatchSession != null && authLatchSession == session
 
-                    val key = "${classTimeline.date}:${current.period}:${current.courseCode}:" +
-                        "${network.transport.name}:$session"
+                    // 実施中、または開始15分前から出席受付が開くコマを対象にする。
+                    val slot = autoCheckTargetSlot(classTimeline)
                     val nowElapsed = SystemClock.elapsedRealtime()
-                    if (refreshGate.isDue(key, nowElapsed)) {
-                        // 失敗した起動も毎秒繰り返さない。
-                        refreshGate.markStarted(key, nowElapsed)
+                    // nonce を含めることで、手動再確認のときはスロットルを無視して due にする。
+                    val key = "${classTimeline.date}:${slot?.period ?: 0}:" +
+                        "${slot?.courseCode ?: "-"}:${network.transport.name}:$session:$manualNonce"
+                    val due = (slot != null || manualPending) && !authLatched &&
+                        (manualPending || refreshGate.isDue(key, nowElapsed))
+
+                    if (due) {
+                        // ブラウザ枠が空くのを待つ（次の1秒 emission で再評価される）。
+                        if (backgroundController.isBrowserBusy) return@collect
+                        // 起動に失敗した直後は、同じキーで毎秒繰り返さない（ゲートは消費しない）。
+                        val recentlyFailed = lastFailedKey == key &&
+                            nowElapsed - lastFailedAt < AUTO_REFRESH_THROTTLE_MS
+                        if (recentlyFailed) return@collect
                         if (backgroundController.tryStartMobileAttendance()) {
-                            requestSession = session
-                            return@collect
+                            // 実際に起動できたときだけゲートを消費する。
+                            refreshGate.markStarted(key, nowElapsed)
+                            handledManualNonce = manualNonce
+                            authLatchSession = session
+                        } else {
+                            lastFailedKey = key
+                            lastFailedAt = nowElapsed
                         }
+                        // 起動できなかった場合も、変更通知にブラウザ枠を渡さず次の emission で再試行する。
+                        return@collect
                     }
+                    // モバイル出席確認が対象・due でないときだけ変更通知を読む。
                     tryRefreshScheduleNotices()
                 }
         }
@@ -457,11 +500,38 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private companion object {
+    internal companion object {
         /** 同じコマ・同じネットワーク種別での自動更新の最短間隔（ミリ秒）。 */
         const val AUTO_REFRESH_THROTTLE_MS = 60_000L
+
+        /** 授業開始の何秒前から出席確認を自動で試すか（CLASS は約10分前から受付）。 */
+        const val PRE_CLASS_WINDOW_SECONDS = 15 * 60L
+
+        /**
+         * 自動出席確認の対象コマ。
+         *
+         * 実施中のコマがあればそれを、無ければ開始まで [PRE_CLASS_WINDOW_SECONDS] 以内の
+         * 次のコマを返す（開始時刻ちょうども含む）。時刻未確定（[ClassTimeline.now] が null）や
+         * 対象外なら null。
+         */
+        fun autoCheckTargetSlot(timeline: ClassTimeline): ClassSlotState? {
+            timeline.current?.let { return it }
+            val now = timeline.now ?: return null
+            val next = timeline.next ?: return null
+            val start = next.start ?: return null
+            val secondsUntilStart = ClassTimelineResolver.secondsUntil(start, now.toLocalTime())
+            return next.takeIf { secondsUntilStart <= PRE_CLASS_WINDOW_SECONDS }
+        }
     }
 }
+
+/** ホーム表示中の自動確認 combine の入力。 */
+private data class AutoRefreshInput(
+    val timeline: ClassTimeline,
+    val network: NetworkStatus,
+    val hasTimetable: Boolean,
+    val manualNonce: Int,
+)
 
 sealed interface AiCardState {
     data object Idle : AiCardState

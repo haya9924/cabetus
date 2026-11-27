@@ -108,6 +108,7 @@ fun HomeScreen(
     val attendanceRisks by viewModel.attendanceRisks.collectAsStateWithLifecycle()
     val mobileStatus by viewModel.mobileStatus.collectAsStateWithLifecycle()
     val scheduleStatus by viewModel.scheduleStatus.collectAsStateWithLifecycle()
+    val canRefreshMobile by viewModel.canRefreshMobile.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -134,6 +135,10 @@ fun HomeScreen(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
+        // 既に RESUMED の状態で戻ってきた場合、ON_RESUME が来ないので即時に同期する。
+        viewModel.setHomeVisible(
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+        )
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.setHomeVisible(false)
@@ -170,6 +175,9 @@ fun HomeScreen(
                     state = classState,
                     attendancePanel = attendancePanel,
                     mobile = mobileStatus,
+                    scheduleRunning = scheduleStatus.running,
+                    canRefreshMobile = canRefreshMobile,
+                    onRefreshMobile = { viewModel.refreshMobileAttendance() },
                     onOpenClass = { openBrowser(BrowserUrlPolicy.CLASS_URL) },
                     onOpenLetus = ::openBrowser,
                     onConfigureLetus = {
@@ -389,12 +397,16 @@ private fun ClassCard(
     state: HomeClassState,
     attendancePanel: List<MobileAttendanceEvidence.PageCourseDisplay>,
     mobile: ClassAttendanceBackgroundController.MobileStatus,
+    scheduleRunning: Boolean,
+    canRefreshMobile: Boolean,
+    onRefreshMobile: () -> Unit,
     onOpenClass: () -> Unit,
     onOpenLetus: (String) -> Unit,
     onConfigureLetus: () -> Unit,
 ) {
     var showDetails by rememberSaveable { mutableStateOf(false) }
-    // 自動の出席確認中はブラウザの導線を無効化する（多重起動防止）。
+    // CLASS ボタンは自動確認中も無効化しない。openForegroundBrowser は背景の確認を安全に
+    // 中断し、Ticket 1 以降は取得済みの有効なスナップショットを失敗で破棄しないため。
     // 対応付けのピッカーはブラウザを開かないので、自動読み取り中も使える。
     val timeline = state.timeline
     val letusLink = state.letusLink
@@ -425,7 +437,13 @@ private fun ClassCard(
                 NextClassBlock(next, timeline.now)
             }
             // 出席状況は実施中のコマの有無によらず、CLASS の画面に写した授業ブロックだけで示す。
-            AttendancePanelSection(attendancePanel, mobile)
+            AttendancePanelSection(
+                courses = attendancePanel,
+                mobile = mobile,
+                scheduleRunning = scheduleRunning,
+                canRefreshMobile = canRefreshMobile,
+                onRefreshMobile = onRefreshMobile,
+            )
             if (timeline.slots.isNotEmpty()) {
                 TodaySlotsRow(timeline.slots)
             }
@@ -807,18 +825,43 @@ private fun CurrentClassBlock(slot: ClassSlotState) {
 private fun AttendancePanelSection(
     courses: List<MobileAttendanceEvidence.PageCourseDisplay>,
     mobile: ClassAttendanceBackgroundController.MobileStatus,
+    scheduleRunning: Boolean,
+    canRefreshMobile: Boolean,
+    onRefreshMobile: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            "出席状況（CLASS）",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-        )
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                "出席状況（CLASS）",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            // 自動確認を待たずに、その場で読み取り直せる小さな導線。
+            TextButton(
+                onClick = onRefreshMobile,
+                enabled = !mobile.running && canRefreshMobile,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    if (mobile.running) "確認中…" else "再確認",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+        }
         if (courses.isEmpty()) {
             Text(
                 when {
                     mobile.running -> "確認中…"
                     mobile.authRequired -> "CLASS にログインしてください"
+                    scheduleRunning -> "授業変更の確認後に自動確認します…"
+                    mobile.failed -> "自動確認できませんでした（状況未確認）"
                     else -> MobileAttendanceEvidence.STATUS_UNKNOWN_LABEL
                 },
                 style = MaterialTheme.typography.bodySmall,
